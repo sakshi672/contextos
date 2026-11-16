@@ -25,7 +25,11 @@ Mark a box `[x]` only when the task is implemented and its stated behavior has b
 ## Phase 1 — Core memory platform
 
 - [x] Build the first persistent local note/link record flow and Library/detail UI; verify create, reopen, edit, and delete over HTTP.
-- [ ] Scaffold the web app, API, database migrations, background jobs, and shared validation/types as chosen in Phase 0.
+- [ ] Scaffold the web app, API, database migrations, background jobs, and shared validation/types as chosen in Phase 0. Started: [FastAPI/PostgreSQL foundation](backend/README.md), [Docker Compose configuration](compose.yaml), initial schema, durable job lease, read-only SQLite snapshot, and typed web API calls. The `0001_core` migration applied to local PostgreSQL and a repeat run applied none. Worker handlers and shared validation remain.
+- [x] Start the versioned FastAPI service with liveness and database-readiness endpoints. HTTP smoke check: liveness returned 200; readiness returned 503 without PostgreSQL configured. See [API entry point](backend/contextos/main.py).
+- [x] Add a read-only snapshot of the SQLite prototype before the PostgreSQL cutover. Verified record count, checksum, Unicode preservation, source unchanged, and refusal to overwrite in [snapshot test](tests/test_legacy_export.py).
+- [x] Implement the first PostgreSQL account-scoped note/link API slice with cookie sessions and CSRF checks. Live [integration test](tests/test_postgres_api.py) verifies two-account isolation, create/edit/delete, login, logout, and session refresh.
+- [x] Switch the local web app's note/link and account flows to PostgreSQL. The legacy SQLite source contained zero memories; a read-only ZIP snapshot is retained locally. The [frontend build](README.md), live API tests, and Vite-to-FastAPI readiness proxy check pass.
 - [ ] Implement account creation, sign-in, sign-out, session handling, and account recovery.
 - [ ] Enforce user ownership checks on every memory, file, project, search, and assistant endpoint.
 - [ ] Create persistent memory records with source type, title, URL or file reference, dates, user note, and processing status.

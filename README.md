@@ -1,6 +1,6 @@
 # Context OS
 
-Context OS is a personal memory system for capturing, connecting, and finding information across sources and projects, including when the user remembers only partial clues. The intended first release is a web app and browser extension with source-preserving capture, project memory, an explainable knowledge graph, hybrid retrieval, and a source-grounded assistant. The current implementation is the first **local development slice**: a light-theme library that saves links and notes, persists them in SQLite, and retrieves them with keyword search. The complete product scope and sequence are in [ROADMAP.md](ROADMAP.md) and [IMPLEMENTATION_CHECKLIST.md](IMPLEMENTATION_CHECKLIST.md).
+Context OS is a personal memory system for capturing, connecting, and finding information across sources and projects, including when the user remembers only partial clues. The intended first release is a web app and browser extension with source-preserving capture, project memory, an explainable knowledge graph, hybrid retrieval, and a source-grounded assistant. The current implementation is the first **local development slice**: a light-theme library with account sign-in that saves links and notes in PostgreSQL. The complete product scope and sequence are in [ROADMAP.md](ROADMAP.md) and [IMPLEMENTATION_CHECKLIST.md](IMPLEMENTATION_CHECKLIST.md).
 
 ## Planned first release
 
@@ -18,22 +18,27 @@ Phase 0 decisions are in the [product and architecture specification](docs/PHASE
 
 ## Run locally
 
-Requirements: Node.js 22+, npm, and Python 3.13+.
+Requirements: Node.js 22+, npm, Python 3.13+, and Docker Desktop running Linux containers.
 
 1. Install frontend dependencies: `npm.cmd install` on Windows or `npm install` elsewhere.
-2. Start the API in one terminal: `python -m server.app`.
-3. Start the web app in another terminal: `npm.cmd run dev` on Windows or `npm run dev` elsewhere.
-4. Open `http://127.0.0.1:5173/`.
+2. Create a virtual environment and install backend dependencies: `python -m venv .venv`, then `.venv\Scripts\python -m pip install -r backend\requirements.txt` on Windows.
+3. Generate local settings once: `.venv\Scripts\python -m backend.contextos.local_db init`. If `backend/.env` already exists, keep it; do not reinitialize the password.
+4. Start PostgreSQL and apply migrations: `docker compose --env-file backend/.env up -d postgres`, then `.venv\Scripts\python -m backend.contextos.local_db migrate`.
+5. Start the API in one terminal: `.venv\Scripts\python -m backend.contextos.local_db serve`.
+6. Start the web app in another terminal: `npm.cmd run dev` on Windows or `npm run dev` elsewhere.
+7. Open `http://127.0.0.1:5173/` and create a local account.
 
-The API listens only on `127.0.0.1:8765`. Vite forwards `/api` calls to it. Local data is stored in `data/context.db` and persists across restarts. Set `CONTEXT_OS_DB` to a different path if needed. Do not expose this development API to the internet; account isolation and production security are later checklist tasks.
+The FastAPI service listens only on `127.0.0.1:8766`; Vite forwards `/v1` calls to it. New account and memory data is stored in PostgreSQL's named Docker volume and persists across restarts. `data/context.db` and `data/legacy-snapshot.zip` are retained as local backups from the SQLite prototype; the source had zero memories at cutover. Do not expose the development API to the internet; recovery, rate limits, and release security checks remain on the checklist.
+
+See the [FastAPI/PostgreSQL backend notes](backend/README.md) for API and database details. The older `server/` SQLite API is kept only for snapshot and regression reference; the running web app uses PostgreSQL.
 
 ## Verify
 
 - Backend workflow tests: `python -m unittest discover -s tests -v`
 - Frontend type check and production build: `npm.cmd run build` (or `npm run build`)
 
-Current manual flow: create a link or note, search for words in its title, URL, or note, edit it, then delete it. Reload the page to check persistence.
+Current manual flow: register, create a link or note, search for words in its title, URL, or note, edit it, then delete it. Reload and sign back in to check PostgreSQL persistence.
 
 ## Current limits
 
-The first slice stores link metadata entered by the user; it does not yet fetch article content. Uploads, browser extension capture, projects, account sign-in, export, semantic search, graph, timeline, and AI are tracked in the checklist. The first public release is planned after the competitive feature set and release-readiness work described in the checklist are complete.
+The current web app stores link metadata entered by the user; it does not yet fetch article content. Uploads, browser extension capture, projects, account recovery, export, semantic search, graph, timeline, and AI are tracked in the checklist. The first public release is planned after the competitive feature set and release-readiness work described in the checklist are complete.

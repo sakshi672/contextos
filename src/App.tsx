@@ -4,6 +4,7 @@ import {
   ExternalLink, FileText, FolderKanban, GitBranch, Link2, Menu,
   Plus, Search, Sparkles, Trash2, X,
 } from 'lucide-react'
+import { api, type Session } from './api'
 
 type Kind = 'note' | 'link'
 type Filter = 'all' | Kind
@@ -16,18 +17,18 @@ type Memory = {
   captured_at: string
   updated_at: string
 }
+type StoredMemory = {
+  id: string; title: string; kind: Kind; source_uri: string | null;
+  user_note: string; captured_at: string; updated_at: string
+}
 type Draft = { title: string; kind: Kind; source_url: string; note: string }
 
 const emptyDraft: Draft = { title: '', kind: 'link', source_url: '', note: '' }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`/api${path}`, {
-    ...options,
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-  })
-  const data = await response.json()
-  if (!response.ok) throw new Error(data.error || 'Something went wrong. Please try again.')
-  return data as T
+function fromStored(row: StoredMemory): Memory {
+  return { id: row.id, title: row.title, kind: row.kind,
+    source_url: row.source_uri ?? '', note: row.user_note,
+    captured_at: row.captured_at, updated_at: row.updated_at }
 }
 
 function formatDate(value: string) {
@@ -39,7 +40,7 @@ function domain(url: string) {
   try { return new URL(url).hostname.replace(/^www\./, '') } catch { return 'Website' }
 }
 
-function App() {
+function App({ session, onSignOut }: { session: Session; onSignOut: () => void }) {
   const [items, setItems] = useState<Memory[]>([])
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
@@ -59,8 +60,8 @@ function App() {
     setError('')
     try {
       const params = new URLSearchParams({ q, kind })
-      const result = await request<{ items: Memory[] }>(`/memories?${params}`)
-      setItems(result.items)
+      const result = await api<{ items: StoredMemory[] }>(`/memories?${params}`)
+      setItems(result.items.map(fromStored))
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not load memories.')
     } finally {
@@ -110,10 +111,16 @@ function App() {
     setEditorError('')
     try {
       if (editor === 'edit' && selected) {
-        await request<Memory>(`/memories/${selected.id}`, { method: 'PUT', body: JSON.stringify(draft) })
+        await api<StoredMemory>(`/memories/${selected.id}`, { method: 'PATCH', body: JSON.stringify({
+          kind: draft.kind, title: draft.title, source_uri: draft.kind === 'link' ? draft.source_url : null,
+          user_note: draft.note,
+        }) })
         setToast('Memory updated')
       } else {
-        await request<Memory>('/memories', { method: 'POST', body: JSON.stringify(draft) })
+        await api<StoredMemory>('/memories', { method: 'POST', body: JSON.stringify({
+          kind: draft.kind, title: draft.title,
+          source_uri: draft.kind === 'link' ? draft.source_url : null, user_note: draft.note,
+        }) })
         setToast('Saved to your library')
       }
       setEditor(null)
@@ -129,7 +136,7 @@ function App() {
   async function remove(item: Memory) {
     if (!window.confirm(`Delete “${item.title}” permanently?`)) return
     try {
-      await request<{ deleted: boolean }>(`/memories/${item.id}`, { method: 'DELETE' })
+      await api<{ deleted: boolean }>(`/memories/${item.id}`, { method: 'DELETE' })
       setSelectedId(null)
       setToast('Memory deleted')
       await load()
@@ -162,7 +169,7 @@ function App() {
       <div className="main-shell">
         <header className="topbar">
           <div className="topbar-left"><button className="icon-button mobile-menu" aria-label="Open menu" onClick={() => setMobileNav(true)}><Menu size={20} /></button><span className="breadcrumb-muted">Workspace</span><span className="breadcrumb-separator">/</span><span className="breadcrumb-current">Library</span></div>
-          <div className="topbar-right"><span className="topbar-caption">Your space for what matters</span><div className="top-avatar">C</div></div>
+          <div className="topbar-right"><span className="topbar-caption">{session.email}</span><button className="signout-button" onClick={onSignOut}>Sign out</button><div className="top-avatar">{session.email[0]?.toUpperCase()}</div></div>
         </header>
 
         <main className="page">

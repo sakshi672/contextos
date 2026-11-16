@@ -1,0 +1,21 @@
+name: contextos-local
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: contextos
+      POSTGRES_DB: contextos
+      POSTGRES_PASSWORD: ${CONTEXT_OS_DB_PASSWORD:?Run python -m backend.contextos.local_db init first}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - contextos_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U contextos -d contextos"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  contextos_pgdata:
