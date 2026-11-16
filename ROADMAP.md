@@ -2,12 +2,12 @@
 
 ## Product boundary
 
-Build a complete, public-ready web product through the brief's **Intelligent Memory** stage. The product has two connected clients:
+Build a competitive, public-ready first release spanning the brief's Memory Foundation and Intelligent Memory capabilities. Prioritize the combined experience of finding a vaguely remembered item, recovering its source, and using its project context; these capabilities are product goals, not claims of proven superiority over competitors. The product has two connected clients:
 
 - **Web app:** account, library, search, projects, collections, tags, relationships, graph, timeline, import/export, settings, and source-grounded AI features.
 - **Browser extension:** an explicit Save current tab action, with optional visible screenshot and user note. The extension sends captures to the same account and memory store as the web app.
 
-The first release covers browser tabs, manually entered URLs and notes, and uploaded PDFs, documents, and images. Capture from other desktop applications needs a desktop companion and is outside this web release. Continuous recording, email access, mobile apps, collaboration, APIs, and MCP integrations remain later platform work.
+The first release covers browser tabs, manually entered URLs and notes, and uploaded PDFs, documents, and images. Capture from other desktop applications needs a desktop companion and is outside this web release. Continuous recording, email access, mobile apps, collaboration, public APIs, MCP integrations, and cross-device local-first sync remain later platform work. Release 2 is for those larger platform expansions, not a holding place for useful features that can be built on the first release's existing infrastructure.
 
 ## The capture promise
 
@@ -55,11 +55,11 @@ Before building the full interface, create and review a high-fidelity visual pro
 | 6. Intelligent Memory | Hybrid keyword and semantic retrieval; vague-query evaluation; related-memory and relationship suggestions with review; project assistant, summaries, and comparison with passage or page citations. | AI features can be disabled; claims link to sources; unanswered questions and uncertain inferences are marked; usage is limited and visible. |
 | 7. Public release readiness | Visual consistency review, accessibility, security review, rate limits, backup/restore, performance, browser compatibility, observability without raw private content, documentation, deployment, and end-to-end tests. | Release checklist passes on a deployed staging environment before public launch. |
 
-These are internal delivery stages. Public access begins after stage 7 passes; the stages are not separate public releases.
+These are internal delivery stages for Release 1. Public access begins after stage 7 passes; the stages are not separate public releases. Release 2 extends the product with the platform capabilities listed above. Research validation is not a prerequisite for implementing the Release 1 feature set.
 
-## Retrieval quality gates
+## Retrieval quality checks
 
-Create a repeatable set of saved items and intended-item queries during development. Include exact phrases, partial titles, source/date clues, and meaning-based descriptions. Record whether the intended source appears in the first results, time to find it, and failures. Compare semantic retrieval with the keyword baseline before shipping it. Keep the original item and the reason each result matched visible to the user.
+Create a repeatable set of saved items and intended-item queries during development. Include exact phrases, partial titles, source/date clues, and meaning-based descriptions. Record whether the intended source appears in the first results, time to find it, and failures. Compare semantic retrieval with the keyword baseline to identify retrieval weaknesses. Keep the original item and the reason each result matched visible to the user.
 
 ## Decisions to settle in stage 0
 
