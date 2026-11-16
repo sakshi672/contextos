@@ -1,6 +1,6 @@
 # Context OS visual system — design direction
 
-Status: **candidate for review**, not final approval. The interactive [prototype](prototype.html) demonstrates Search, Library, Memory detail, and extension save feedback. The direction is original to Context OS and uses the user's references as quality benchmarks rather than component templates.
+Status: **light theme approved as the working implementation baseline** on 16 November 2026. The interactive [prototype](prototype.html) demonstrates Search, Library, Memory detail, and extension save feedback in light and graphite themes. The direction is original to Context OS and uses the user's references as quality benchmarks rather than component templates. Visual details may be refined during implementation.
 
 ## Idea
 
@@ -19,7 +19,7 @@ The provisional mark is a rounded open-frame symbol: a small shape suggesting a 
 | Surface muted | `#F3F4F2` | Secondary controls |
 | Ink | `#252B35` | Main text |
 | Ink secondary | `#6F7782` | Supporting text |
-| Ink quiet | `#9BA2AA` | Meta labels |
+| Ink quiet | `#6E7883` | Meta labels with readable contrast |
 | Border | `#E6E9E7` | Dividers and control outlines |
 | Accent | `#526187` | Primary action, selected state |
 | Accent soft | `#EEF0F6` | Selected rows and badges |
@@ -28,7 +28,11 @@ The provisional mark is a rounded open-frame symbol: a small shape suggesting a 
 
 Use DM Sans for headings and Inter for interface text, with system sans-serif fallbacks. Heading sizes: 40–56 px for a page statement, 24–32 px for a page title, 18–20 px for section titles. Interface text is 12–14 px with sufficient line height for reading. The spacing scale is 4, 8, 12, 16, 24, 32, 48, 64 px. Primary surfaces use 12–14 px radii; inputs and buttons 8–10 px. Borders are 1 px. Shadows are soft and used only to distinguish raised surfaces or transient panels.
 
-Motion uses 140–220 ms transitions for hover, selection, dialog entrance, and confirmation. It supports reduced-motion preference. Focus rings are always visible. The default theme is light; dark mode can follow after the light system is approved.
+Motion uses 140–220 ms transitions for hover, selection, dialog entrance, and confirmation. It supports reduced-motion preference. Focus rings are always visible, including around the search field. The default theme is light.
+
+## Graphite theme study
+
+The prototype includes a near-black alternative for comparison. It uses `#11151C` canvas, `#1B212B` panels, `#EDF1F6` primary text, and a cool `#A6B7E7` accent. Surfaces are separated with visible borders and restrained elevation. Graphite is retained as a design study; a dark-mode setting is not part of the approved Phase 0 implementation baseline. It can be considered later without changing the light default.
 
 ## Interaction patterns
 
@@ -41,4 +45,4 @@ Motion uses 140–220 ms transitions for hover, selection, dialog entrance, and 
 
 ## Review criteria
 
-Review the prototype at desktop and narrow widths. Confirm the hierarchy, readability, density, interaction feedback, and whether the identity feels distinct enough. After review, update these tokens and apply them consistently to the running app and extension. Do not mark the design system approved until that review is complete.
+Open [prototype.html](prototype.html) in a browser. Use the top row to switch screens, data states, and the light/graphite theme. [Review notes](REVIEW.md) record the internal checks and the decision to proceed with light. Apply the light tokens and interaction patterns consistently to the running app and extension, refining them when usability testing shows a need.
