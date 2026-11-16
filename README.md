@@ -1,6 +1,18 @@
 # Context OS
 
-Context OS is being built as a web app and a browser extension. The current implementation is the first **local development slice**: a light-theme library that saves links and notes, persists them in SQLite, and retrieves them with keyword search. The complete product scope and sequence are in [ROADMAP.md](ROADMAP.md) and [IMPLEMENTATION_CHECKLIST.md](IMPLEMENTATION_CHECKLIST.md).
+Context OS is a personal memory system for capturing, connecting, and finding information across sources and projects, including when the user remembers only partial clues. The intended first release is a web app and browser extension with source-preserving capture, project memory, an explainable knowledge graph, hybrid retrieval, and a source-grounded assistant. The current implementation is the first **local development slice**: a light-theme library that saves links and notes, persists them in SQLite, and retrieves them with keyword search. The complete product scope and sequence are in [ROADMAP.md](ROADMAP.md) and [IMPLEMENTATION_CHECKLIST.md](IMPLEMENTATION_CHECKLIST.md).
+
+## Planned first release
+
+Release 1 combines a responsive web app and Chrome/Chromium extension with:
+
+- One-click browser capture, links, notes, PDFs, supported documents, and images; extracted text, OCR, and source information where available.
+- A searchable library with keyword and semantic retrieval, filters, match explanations, and recovery from partial clues.
+- Projects, tags, collections, annotations, a saved-memory timeline, and an explainable graph with user-controlled connections.
+- Related-memory and project suggestions, plus an optional AI assistant that summarizes, compares, and answers with sources and clearly identified uncertainty.
+- Import and export, deletion controls, and transparent, user-controlled AI processing.
+
+The goal is a useful competitive experience across these features; no single feature guarantees an advantage. Desktop and mobile capture, selected activity history, public API/MCP access, and optional sync are later platform work. Product-market validation is not a prerequisite for implementing the planned first-release features.
 
 Phase 0 decisions are in the [product and architecture specification](docs/PHASE_0_SPEC.md). The [interactive design prototype](design/prototype.html) shows Search, Library, Memory detail, and extension save feedback with sample data. Open it directly in a browser; it is a design study, separate from the running app. The [visual system](design/BRAND.md) uses a light theme as the working implementation baseline.
 
@@ -24,4 +36,4 @@ Current manual flow: create a link or note, search for words in its title, URL, 
 
 ## Current limits
 
-The first slice stores link metadata entered by the user; it does not yet fetch article content. Uploads, browser extension capture, projects, account sign-in, export, semantic search, graph, timeline, and AI are tracked in the checklist. No public deployment is planned until the complete product passes the release phase.
+The first slice stores link metadata entered by the user; it does not yet fetch article content. Uploads, browser extension capture, projects, account sign-in, export, semantic search, graph, timeline, and AI are tracked in the checklist. The first public release is planned after the competitive feature set and release-readiness work described in the checklist are complete.

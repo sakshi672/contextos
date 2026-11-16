@@ -1,6 +1,6 @@
 # Context OS implementation checklist
 
-Track the complete web product through Intelligent Memory, including the browser extension. See [ROADMAP.md](ROADMAP.md) for scope and product direction.
+Track Release 1 of the web product through Intelligent Memory, including the browser extension. Its competitive goal is to recover vaguely remembered information with source provenance and project context; feature inclusion does not itself establish competitive superiority. Release 2 covers larger platform expansions, not routine features that fit the existing architecture. See [ROADMAP.md](ROADMAP.md) for scope and product direction.
 
 Mark a box `[x]` only when the task is implemented and its stated behavior has been verified. Keep unfinished work as `[ ]`. Add a short link or note beside a completed item when the evidence is not obvious from the code. Complete each phase's exit check before treating the phase as done. These are internal build phases; public launch comes after Phase 7.
 
@@ -35,6 +35,7 @@ Mark a box `[x]` only when the task is implemented and its stated behavior has b
 - [ ] Build the Memory detail screen with original source access, metadata, notes, and processing feedback.
 - [ ] Add file validation, size limits, safe file handling, and clear unsupported-input messages.
 - [ ] Implement data export in the documented format, including source metadata and user-authored content.
+- [ ] Import common browser bookmark files and the documented Context OS export, preserving supported metadata and reporting duplicates and failures.
 - [ ] Implement permanent deletion across records, stored files, extracted text, and search data.
 - [ ] Add meaningful tests for ownership boundaries, persistence, export, and deletion.
 - [ ] **Phase 1 exit:** one user can create, reopen, edit, export, and delete a memory; another user cannot access it.
@@ -56,7 +57,7 @@ Mark a box `[x]` only when the task is implemented and its stated behavior has b
 
 ## Phase 3 — Cross-source capture and extraction
 
-- [ ] Add manual URL capture in the web app with metadata and readable-text extraction where possible.
+- [ ] Add manual URL capture in the web app with readable-text extraction and available source, author, publication date, and image metadata. Preserve a permitted snapshot or archived copy where practical; clearly show when only extracted text or a URL was saved.
 - [ ] Add standalone notes and pasted text/snippet capture.
 - [ ] Add PDF upload, text extraction, page references, and scanned-PDF status handling.
 - [ ] Add the selected launch document formats with extraction and clear unsupported-format feedback.
@@ -98,18 +99,21 @@ Mark a box `[x]` only when the task is implemented and its stated behavior has b
 ## Phase 6 — Intelligent Memory
 
 - [ ] Implement embeddings for new or changed content with a documented provider, usage limit, and retry behavior.
-- [ ] Add hybrid keyword and semantic retrieval with source/date/project filters preserved.
+- [ ] Add hybrid keyword and semantic retrieval with source/date/project filters preserved; combine available partial clues such as meaning, entities, approximate dates, source, and extracted image text. Do not imply unsupported visual matching.
 - [ ] Evaluate vague-memory queries against the Phase 0 corpus and compare results with the keyword baseline.
 - [ ] Show why semantic results matched and provide alternative results when confidence is low.
 - [ ] Add related-memory suggestions with evidence and user approval/dismissal.
 - [ ] Add suggested relationships/entities with visible provenance, review, and reversal controls.
-- [ ] Add project-specific assistant questions over the user's saved sources.
+- [ ] Suggest relevant memories for a project, including memories already associated with other projects; let the user approve or dismiss associations.
+- [ ] Surface recurring themes across selected memories and suggest tags or collections for user review.
+- [ ] Add project-specific assistant questions over the user's saved sources, including research synthesis and identification of unanswered questions where evidence permits.
 - [ ] Add single-source summaries and multi-source comparisons on demand.
+- [ ] Generate ideas grounded in selected memories, identifying supporting sources and model inference.
 - [ ] Link assistant claims to the underlying memory and passage/page when available.
 - [ ] Distinguish source facts, model inference, and missing evidence in assistant responses.
 - [ ] Cache safe repeated operations and avoid regenerating unchanged content unnecessarily.
 - [ ] Let users disable AI; core capture, library, projects, graph, timeline, and keyword search remain functional.
-- [ ] Show AI processing disclosure and usage/cost limits before private content is sent to a provider.
+- [ ] Show AI processing disclosure and usage/cost limits before private content is sent to a provider; prohibit training on private memories without explicit user consent.
 - [ ] Include embeddings and generated content in deletion/reprocessing behavior.
 - [ ] Test citations against source passages and test the disabled/over-budget AI states.
 - [ ] **Phase 6 exit:** vague retrieval and source-grounded assistance work across a project, with measured quality and optional AI.
@@ -130,6 +134,15 @@ Mark a box `[x]` only when the task is implemented and its stated behavior has b
 - [ ] Update developer setup, run, test, and deployment documentation.
 - [ ] Complete a staging walkthrough of the entire user journey and resolve launch-blocking defects.
 - [ ] **Phase 7 exit:** the deployed staging product meets functional, visual, accessibility, security, and recovery checks; public launch is ready.
+
+## Release 2 ? Platform expansion
+
+- [ ] Add portable, permission-scoped access to selected memories and project knowledge through an API and MCP.
+- [ ] Expand import from supported external services and additional formats.
+- [ ] Explore desktop and mobile capture, selected activity history, and optional encrypted cross-device sync.
+- [ ] Explore context-aware resurfacing and optional shared project spaces.
+
+These are future scope, not prerequisites for Release 1. Implement smaller compatible improvements in Release 1 when practical.
 
 ## Release record
 
