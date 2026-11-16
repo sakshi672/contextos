@@ -18,9 +18,9 @@ Mark a box `[x]` only when the task is implemented and its stated behavior has b
 - [x] Create a small representative corpus and retrieval queries for later search evaluation. See [seed cases](evaluation/seed_cases.json).
 - [x] Design an original Context OS identity: logo/wordmark direction, light-theme palette, type scale, spacing, radii, borders, shadows, icons, and motion rules. See [brand direction](design/BRAND.md).
 - [x] Create high-fidelity light-theme prototypes for Search, Library, Memory detail, and extension save feedback. See [interactive prototype](design/prototype.html).
-- [ ] Review populated, empty, loading, error, hover, focus, and small-screen states in those prototypes.
-- [ ] Document the approved design system and interaction patterns for implementation.
-- [ ] **Phase 0 exit:** architecture and design decisions are recorded, and the project starts locally from documented commands.
+- [x] Review populated, empty, loading, error, hover, focus, and small-screen states in those prototypes. See [visual review notes](design/REVIEW.md); true 390 px device QA remains for implementation.
+- [x] Document the approved working design system and interaction patterns for implementation. Light theme selected as the current default; see [brand system](design/BRAND.md) and [review](design/REVIEW.md).
+- [x] **Phase 0 exit:** architecture and light-theme design decisions are recorded; the local API workflow tests and frontend build pass using the documented commands. See [Phase 0 specification](docs/PHASE_0_SPEC.md), [visual system](design/BRAND.md), and [README](README.md).
 
 ## Phase 1 — Core memory platform
 

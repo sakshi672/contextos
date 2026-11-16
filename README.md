@@ -2,7 +2,7 @@
 
 Context OS is being built as a web app and a browser extension. The current implementation is the first **local development slice**: a light-theme library that saves links and notes, persists them in SQLite, and retrieves them with keyword search. The complete product scope and sequence are in [ROADMAP.md](ROADMAP.md) and [IMPLEMENTATION_CHECKLIST.md](IMPLEMENTATION_CHECKLIST.md).
 
-Phase 0 decisions are in the [product and architecture specification](docs/PHASE_0_SPEC.md). The [interactive design prototype](design/prototype.html) shows Search, Library, Memory detail, and extension save feedback with sample data. Open it directly in a browser; it is a design study, separate from the running app. The [visual system](design/BRAND.md) is a candidate for review.
+Phase 0 decisions are in the [product and architecture specification](docs/PHASE_0_SPEC.md). The [interactive design prototype](design/prototype.html) shows Search, Library, Memory detail, and extension save feedback with sample data. Open it directly in a browser; it is a design study, separate from the running app. The [visual system](design/BRAND.md) uses a light theme as the working implementation baseline.
 
 ## Run locally
 
