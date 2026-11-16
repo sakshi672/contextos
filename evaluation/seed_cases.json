@@ -1,0 +1,19 @@
+{
+  "purpose": "Synthetic development baseline; replace or expand with observed retrieval tasks before public release.",
+  "items": [
+    {"id":"m01","kind":"link","title":"Designing resilient background jobs","source":"https://example.org/engineering/jobs","saved_at":"2026-10-09","note":"Retry and lease patterns for the research pipeline"},
+    {"id":"m02","kind":"pdf","title":"Visual memory and information retrieval","source":"visual-memory-study.pdf","saved_at":"2026-09-21","note":"The paper with the chart about vague recall"},
+    {"id":"m03","kind":"note","title":"Northstar research questions","source":null,"saved_at":"2026-11-02","note":"Compare how people recover forgotten articles"},
+    {"id":"m04","kind":"link","title":"PostgreSQL full-text search guide","source":"https://example.org/docs/search","saved_at":"2026-10-27","note":"Ranking, snippets, and filters"},
+    {"id":"m05","kind":"image","title":"Competitor pricing screenshot","source":"pricing-capture.png","saved_at":"2026-10-18","note":"Blue pricing card, annual discount shown"},
+    {"id":"m06","kind":"link","title":"A field guide to browser extensions","source":"https://example.org/browser/extensions","saved_at":"2026-10-30","note":"Permissions and current-tab capture"}
+  ],
+  "queries": [
+    {"query":"background jobs","expected_id":"m01","clue_type":"exact"},
+    {"query":"visual memory chart","expected_id":"m02","clue_type":"partial"},
+    {"query":"article about retries from last month","expected_id":"m01","clue_type":"meaning_and_date"},
+    {"query":"the blue pricing picture","expected_id":"m05","clue_type":"visual_note"},
+    {"query":"permissions for saving the current tab","expected_id":"m06","clue_type":"meaning"},
+    {"query":"ranking snippets filters","expected_id":"m04","clue_type":"note"}
+  ]
+}
