@@ -150,6 +150,47 @@ class PostgresApiTest(unittest.TestCase):
         self.assertEqual(result["data"]["id"], session["data"]["id"])
         self.assertEqual(self.call(first, "/v1/auth/session")[0], 200)
 
+    def test_password_recovery_is_one_time_and_revokes_sessions(self):
+        user, csrf = self.register()
+        account_id = self.started_accounts[-1]
+        email = self.call(user, "/v1/auth/session")[1]["data"]["email"]
+        delivered = []
+        with patch("backend.contextos.recovery.deliver", side_effect=lambda address, token, mode: delivered.append((address, token, mode))):
+            status, result = self.call(user, "/v1/auth/recover/request", "POST", {"email": email})
+            self.assertEqual(status, 200, result)
+            self.assertNotIn("token", json.dumps(result))
+            self.assertEqual(self.call(user, "/v1/auth/recover/request", "POST", {"email": email})[0], 200)
+            self.assertEqual(self.call(user, "/v1/auth/recover/request", "POST", {"email": "unknown@example.test"})[0], 200)
+        self.assertEqual(len(delivered), 1)
+        self.assertEqual(delivered[0][0], email)
+        self.assertEqual(delivered[0][2], "local")
+        token = delivered[0][1]
+        status, result = self.call(user, "/v1/auth/recover/reset", "POST", {
+            "token": token, "password": "a-different-long-password",
+        })
+        self.assertEqual(status, 200, result)
+        self.assertEqual(self.call(user, "/v1/auth/session")[0], 401)
+        self.assertEqual(self.call(user, "/v1/auth/recover/reset", "POST", {
+            "token": token, "password": "another-long-password",
+        })[0], 400)
+        self.assertEqual(self.call(user, "/v1/auth/login", "POST", {
+            "email": email, "password": "test-password-very-long",
+        })[0], 401)
+        self.assertEqual(self.call(user, "/v1/auth/login", "POST", {
+            "email": email, "password": "a-different-long-password",
+        })[0], 200)
+        with connection() as db:
+            verified = db.execute("SELECT email_verified_at FROM accounts WHERE id = %s", (account_id,)).fetchone()
+        self.assertIsNotNone(verified["email_verified_at"])
+
+    def test_invalid_email_is_rejected_before_recovery_delivery(self):
+        user = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        with patch("backend.contextos.recovery.deliver") as delivery:
+            status, _ = self.call(user, "/v1/auth/recover/request", "POST",
+                                  {"email": "person@example.test\nBcc:other@example.test"})
+            self.assertEqual(status, 422)
+            delivery.assert_not_called()
+
     def test_text_upload_extract_and_private_download(self):
         first, first_csrf = self.register()
         first_account = self.started_accounts[-1]
@@ -180,7 +221,7 @@ class PostgresApiTest(unittest.TestCase):
         self.assertFalse(path_for(key).exists())
         self.assertEqual(self.call(first, f"/v1/memories/{memory_id}/content")[0], 404)
 
-    def test_invalid_text_upload_preserves_original_and_reports_failure(self):
+    def test_invalid_text_upload_rejected_and_corrupt_original_reports_failure(self):
         first, csrf = self.register()
         account_id = self.started_accounts[-1]
         unsupported = Request(
@@ -196,13 +237,24 @@ class PostgresApiTest(unittest.TestCase):
             self.base + "/v1/uploads/text?filename=broken.txt", data=payload, method="POST",
             headers={"X-CSRF-Token": csrf},
         )
-        with first.open(invalid, timeout=5) as response:
+        with self.assertRaises(HTTPError) as error:
+            first.open(invalid, timeout=5)
+        self.assertEqual(error.exception.code, 422)
+        self.assertEqual(self.call(first, "/v1/memories?kind=document")[1]["data"]["total"], 0)
+
+        valid = Request(self.base + "/v1/uploads/text?filename=broken.txt", data=b"valid text",
+                        method="POST", headers={"X-CSRF-Token": csrf})
+        with first.open(valid, timeout=5) as response:
             memory_id = json.load(response)["data"]["id"]
+        with connection() as db:
+            key = db.execute("SELECT object_key FROM memory_assets WHERE memory_id = %s",
+                             (memory_id,)).fetchone()["object_key"]
+        path_for(key).write_bytes(payload)
         self.assertTrue(run_once(account_id=account_id))
         self.assertEqual(self.call(first, f"/v1/memories/{memory_id}")[1]["data"]["status"], "failed")
         with connection() as db:
             job = db.execute("SELECT status, error_code FROM extraction_jobs WHERE memory_id = %s", (memory_id,)).fetchone()
-        self.assertEqual((job["status"], job["error_code"]), ("failed", "invalid_text_encoding"))
+        self.assertEqual((job["status"], job["error_code"]), ("failed", "checksum_mismatch"))
         self.assertEqual(self.call(first, f"/v1/memories/{memory_id}/content")[0], 404)
         with first.open(self.base + f"/v1/uploads/{memory_id}/original", timeout=5) as response:
             self.assertEqual(response.read(), payload)
@@ -352,6 +404,27 @@ class PostgresApiTest(unittest.TestCase):
             report = json.load(response)["data"]
         self.assertEqual((report["imported"], report["duplicates"], report["failed"]), (1, 1, 1), report)
         self.assertEqual(self.call(user, "/v1/memories")[1]["data"]["total"], 1)
+
+    def test_import_rejects_bad_archives_without_creating_records(self):
+        user, csrf = self.register()
+        for payload in (b"not a zip", self._archive_with_unsafe_path()):
+            request = Request(self.base + "/v1/import?format=contextos", data=payload,
+                              method="POST", headers={"X-CSRF-Token": csrf})
+            with self.assertRaises(HTTPError) as error:
+                user.open(request, timeout=5)
+            self.assertEqual(error.exception.code, 422)
+        self.assertEqual(self.call(user, "/v1/memories")[1]["data"]["total"], 0)
+
+    @staticmethod
+    def _archive_with_unsafe_path():
+        output = BytesIO()
+        with ZipFile(output, "w") as archive:
+            archive.writestr("../outside", "bad")
+            archive.writestr("manifest.json", json.dumps({"format": "contextos-account-export", "version": 1,
+                                                          "memory_count": 0, "content_count": 0, "asset_count": 0}))
+            for name in ("memories.jsonl", "contents.jsonl", "assets.jsonl"):
+                archive.writestr(name, "")
+        return output.getvalue()
 
     def test_file_cleanup_retries_after_unlink_failure(self):
         user, csrf = self.register()

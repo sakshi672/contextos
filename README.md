@@ -25,7 +25,7 @@ Requirements: Node.js 22+, npm, Python 3.13+, and Docker Desktop running Linux c
 3. Generate local settings once: `.venv\Scripts\python -m backend.contextos.local_db init`. If `backend/.env` already exists, keep it; do not reinitialize the password.
 4. Start PostgreSQL and apply migrations: `docker compose --env-file backend/.env up -d postgres`, then `.venv\Scripts\python -m backend.contextos.local_db migrate`.
 5. Start the API in one terminal: `.venv\Scripts\python -m backend.contextos.local_db serve`.
-6. Start the extraction worker in another terminal: `.venv\Scripts\python -m backend.contextos.local_db worker`.
+6. Start the extraction and file-cleanup worker in another terminal: `.venv\Scripts\python -m backend.contextos.local_db worker`.
 7. Start the web app in a third terminal: `npm.cmd run dev` on Windows or `npm run dev` elsewhere.
 8. Open `http://127.0.0.1:5173/` and create a local account.
 
@@ -38,8 +38,8 @@ See the [FastAPI/PostgreSQL backend notes](backend/README.md) for API and databa
 - Backend workflow tests: `python -m unittest discover -s tests -v`
 - Frontend type check and production build: `npm.cmd run build` (or `npm run build`)
 
-Current manual flow: register, create a link or note, or upload a UTF-8 TXT/Markdown file. Uploaded documents move from pending to ready when the worker extracts their text. Open a document to view the extracted text or download the private original. Sort, filter, and page through the Library, then use **Export your data** in the sidebar to download an account-scoped ZIP. Reload and sign back in to check PostgreSQL persistence.
+Current manual flow: register, create a link or note, or upload a UTF-8 TXT/Markdown file. Uploaded documents move from pending to ready when the worker extracts their text. Open a document to view the extracted text or download the private original. Sort, filter, and page through the Library. Use **Export your data** to download an account-scoped ZIP and **Import data** to restore it or import browser bookmark HTML. Reload and sign back in to check PostgreSQL persistence. For local password recovery, use **Forgot password?** and open the newest link for your account in `data/recovery-outbox/`.
 
 ## Current limits
 
-The current web app stores link metadata entered by the user; it does not yet fetch article content. Only TXT and Markdown uploads are supported so far. PDF, DOCX, images, browser extension capture, projects, account recovery, export import, semantic search, graph, timeline, and AI are tracked in the checklist. The first public release is planned after the competitive feature set and release-readiness work described in the checklist are complete.
+The current web app stores link metadata entered by the user; it does not yet fetch article content. Only TXT and Markdown uploads are supported so far. PDF, DOCX, images, browser extension capture, projects, semantic search, graph, timeline, and AI are tracked in the checklist. Hosted email verification, abuse controls, and release security checks are also outstanding. The first public release is planned after the competitive feature set and release-readiness work described in the checklist are complete.

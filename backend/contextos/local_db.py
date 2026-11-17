@@ -32,6 +32,7 @@ def load_env() -> None:
     os.environ["CONTEXT_OS_DATABASE_URL"] = values["CONTEXT_OS_DATABASE_URL"]
     # Local HTTP is loopback-only. Hosted deployments keep secure cookies on.
     os.environ["CONTEXT_OS_COOKIE_SECURE"] = "false"
+    os.environ["CONTEXT_OS_RECOVERY_DELIVERY"] = "local"
 
 
 def main():
