@@ -1,6 +1,7 @@
 """Owned direct uploads for small text documents in local Phase 1."""
 
 import hashlib
+import codecs
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,6 +41,7 @@ async def upload_text(
     target = path_for(key)
     target.parent.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256()
+    decoder = codecs.getincrementaldecoder("utf-8-sig")()
     size = 0
     try:
         with target.open("xb") as output:
@@ -47,8 +49,18 @@ async def upload_text(
                 size += len(chunk)
                 if size > MAX_TEXT_BYTES:
                     raise HTTPException(413, detail="File exceeds the 10 MiB limit")
+                try:
+                    decoded = decoder.decode(chunk)
+                except UnicodeDecodeError as exc:
+                    raise HTTPException(422, detail="File must contain UTF-8 text") from exc
+                if "\x00" in decoded:
+                    raise HTTPException(422, detail="File contains binary content")
                 digest.update(chunk)
                 output.write(chunk)
+            try:
+                decoder.decode(b"", final=True)
+            except UnicodeDecodeError as exc:
+                raise HTTPException(422, detail="File must contain UTF-8 text") from exc
         if size == 0:
             raise HTTPException(422, detail="File is empty")
         with connection() as db:

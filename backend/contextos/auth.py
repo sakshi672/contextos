@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import os
+import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -21,6 +22,13 @@ SESSION_DAYS = 14
 class Credentials(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=12, max_length=1024)
+
+
+def normalize_email(value: str) -> str:
+    email = value.strip().lower()
+    if not re.fullmatch(r"[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+", email):
+        raise HTTPException(422, detail="Enter a valid email address")
+    return email
 
 
 def password_hash(password: str) -> str:
@@ -96,9 +104,7 @@ def write_session(
 
 @router.post("/register", status_code=201)
 def register(credentials: Credentials, response: Response) -> dict:
-    email = credentials.email.strip().lower()
-    if "@" not in email or email.startswith("@") or email.endswith("@"):
-        raise HTTPException(422, detail="Enter a valid email address")
+    email = normalize_email(credentials.email)
     account_id = uuid.uuid4()
     with connection() as db:
         try:
@@ -117,7 +123,7 @@ def login(credentials: Credentials, response: Response) -> dict:
     with connection() as db:
         row = db.execute(
             "SELECT id, email, password_hash FROM accounts WHERE email = %s",
-            (credentials.email.strip().lower(),),
+            (normalize_email(credentials.email),),
         ).fetchone()
         if row is None or not verify_password(credentials.password, row["password_hash"]):
             raise HTTPException(401, detail="Invalid email or password")
