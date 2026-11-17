@@ -25,22 +25,25 @@ Mark a box `[x]` only when the task is implemented and its stated behavior has b
 ## Phase 1 — Core memory platform
 
 - [x] Build the first persistent local note/link record flow and Library/detail UI; verify create, reopen, edit, and delete over HTTP.
-- [ ] Scaffold the web app, API, database migrations, background jobs, and shared validation/types as chosen in Phase 0. Started: [FastAPI/PostgreSQL foundation](backend/README.md), [Docker Compose configuration](compose.yaml), initial schema, durable job lease, read-only SQLite snapshot, and typed web API calls. The `0001_core` migration applied to local PostgreSQL and a repeat run applied none. Worker handlers and shared validation remain.
+- [ ] Scaffold the web app, API, database migrations, background jobs, and shared validation/types as chosen in Phase 0. Started: [FastAPI/PostgreSQL foundation](backend/README.md), [Docker Compose configuration](compose.yaml), initial schema, durable job lease and text extraction handler, read-only SQLite snapshot, and typed web API calls. The `0001_core` migration applied to local PostgreSQL and a repeat run applied none. Shared validation and handlers for later source types remain.
 - [x] Start the versioned FastAPI service with liveness and database-readiness endpoints. HTTP smoke check: liveness returned 200; readiness returned 503 without PostgreSQL configured. See [API entry point](backend/contextos/main.py).
 - [x] Add a read-only snapshot of the SQLite prototype before the PostgreSQL cutover. Verified record count, checksum, Unicode preservation, source unchanged, and refusal to overwrite in [snapshot test](tests/test_legacy_export.py).
 - [x] Implement the first PostgreSQL account-scoped note/link API slice with cookie sessions and CSRF checks. Live [integration test](tests/test_postgres_api.py) verifies two-account isolation, create/edit/delete, login, logout, and session refresh.
 - [x] Switch the local web app's note/link and account flows to PostgreSQL. The legacy SQLite source contained zero memories; a read-only ZIP snapshot is retained locally. The [frontend build](README.md), live API tests, and Vite-to-FastAPI readiness proxy check pass.
+- [x] Add the first private file workflow for UTF-8 TXT/Markdown: 10 MiB upload limit, original stored under a generated key, durable extraction job, extracted content in PostgreSQL, owner-only download/read, and deletion of the local original. Live [tests](tests/test_postgres_api.py) cover success, invalid encoding, ownership, expired worker leases, and object-deletion retry. Other launch formats remain open.
+- [x] Add a first account-scoped ZIP export for current note/link/document records, extracted text, and original files. The [live test](tests/test_postgres_api.py) verifies source bytes and metadata are present, a second account's records are absent, and version 1 can be imported into another account. Future organization data remains open.
+- [x] Add Library count, title/updated/recent sorting, file-type filtering, and page navigation. The [live API test](tests/test_postgres_api.py) verifies paginated totals and ordering without cross-account records.
 - [ ] Implement account creation, sign-in, sign-out, session handling, and account recovery.
 - [ ] Enforce user ownership checks on every memory, file, project, search, and assistant endpoint.
 - [ ] Create persistent memory records with source type, title, URL or file reference, dates, user note, and processing status.
 - [ ] Store original uploads separately from extracted text and AI-derived content.
 - [x] Implement create, view, edit, and delete operations for the current note/link memory records.
-- [ ] Build the Library screen with usable rows/cards, sorting, pagination, and source/status indicators.
-- [ ] Build the Memory detail screen with original source access, metadata, notes, and processing feedback.
+- [x] Build the Library screen with usable rows/cards, sorting, pagination, and source/status indicators for current note, link, and text-document types. See [web app](src/App.tsx) and [API test](tests/test_postgres_api.py).
+- [x] Build the Memory detail screen with original source access, metadata, notes, and processing feedback for current types. See [web app](src/App.tsx) and [private-file test](tests/test_postgres_api.py).
 - [ ] Add file validation, size limits, safe file handling, and clear unsupported-input messages.
 - [ ] Implement data export in the documented format, including source metadata and user-authored content.
-- [ ] Import common browser bookmark files and the documented Context OS export, preserving supported metadata and reporting duplicates and failures.
-- [ ] Implement permanent deletion across records, stored files, extracted text, and search data.
+- [x] Import UTF-8 Netscape browser bookmark HTML and the version 1 Context OS ZIP for current note/link/document types, preserving supported metadata and reporting duplicates and failures. Live round-trip and bookmark tests in [tests/test_postgres_api.py](tests/test_postgres_api.py). Additional bookmark encodings and future source types remain for later phases.
+- [x] Implement permanent deletion for current records, extracted text, search fields, and originals. Object cleanup is transactionally queued and retried after unlink failures; see [migration](backend/migrations/0002_object_deletions.sql) and [live test](tests/test_postgres_api.py). Future embeddings and graph data will need deletion coverage in their phases.
 - [ ] Add meaningful tests for ownership boundaries, persistence, export, and deletion.
 - [ ] **Phase 1 exit:** one user can create, reopen, edit, export, and delete a memory; another user cannot access it.
 

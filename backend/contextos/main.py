@@ -6,10 +6,16 @@ import psycopg
 from .database import connection
 from .auth import router as auth_router
 from .memories import router as memories_router
+from .uploads import router as uploads_router
+from .exports import router as exports_router
+from .imports import router as imports_router
 
 app = FastAPI(title="Context OS API", version="0.1.0", docs_url=None, redoc_url=None)
 app.include_router(auth_router)
 app.include_router(memories_router)
+app.include_router(uploads_router)
+app.include_router(exports_router)
+app.include_router(imports_router)
 
 
 @app.middleware("http")
