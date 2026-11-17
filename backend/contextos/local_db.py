@@ -36,7 +36,7 @@ def load_env() -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Local Docker PostgreSQL setup")
-    parser.add_argument("command", choices=("init", "migrate", "serve"))
+    parser.add_argument("command", choices=("init", "migrate", "serve", "worker"))
     args = parser.parse_args()
     if args.command == "init":
         try:
@@ -50,10 +50,14 @@ def main():
         from .migrate import migrate
 
         print("Applied:", ", ".join(migrate()) or "none")
-    else:
+    elif args.command == "serve":
         import uvicorn
 
         uvicorn.run("backend.contextos.main:app", host="127.0.0.1", port=8766)
+    else:
+        from .worker import main as run_worker
+
+        run_worker()
 
 
 if __name__ == "__main__":

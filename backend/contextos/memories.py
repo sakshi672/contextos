@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from .auth import current_session, write_session
 from .database import connection
+from .object_cleanup import cleanup_one
 
 router = APIRouter(prefix="/v1/memories", tags=["memories"])
 FIELDS = "id, kind, title, source_uri, source_domain, captured_at, status, user_note, created_at, updated_at"
@@ -67,23 +68,35 @@ def create_memory(payload: MemoryInput, session: dict = Depends(write_session)) 
 @router.get("")
 def list_memories(
     session: dict = Depends(current_session),
-    kind: Literal["all", "note", "link"] = "all",
+    kind: Literal["all", "note", "link", "document"] = "all",
     q: str = Query(default="", max_length=200),
+    sort: Literal["recent", "updated", "title"] = "recent",
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> dict:
     # Escape LIKE metacharacters so the user's words are searched literally.
     search = "%" + q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    predicate = (
+        "account_id = %s AND (%s = 'all' OR kind = %s) "
+        "AND (%s = '' OR title ILIKE %s ESCAPE '\\' OR user_note ILIKE %s ESCAPE '\\' "
+        "OR source_uri ILIKE %s ESCAPE '\\')"
+    )
+    params = (session["account_id"], kind, kind, q.strip(), search, search, search)
+    ordering = {
+        "recent": "captured_at DESC, id DESC",
+        "updated": "updated_at DESC, id DESC",
+        "title": "lower(title) ASC, id ASC",
+    }[sort]
     with connection() as db:
+        total = db.execute(
+            f"SELECT count(*) AS total FROM memories WHERE {predicate}", params,
+        ).fetchone()["total"]
         rows = db.execute(
-            f"SELECT {FIELDS} FROM memories WHERE account_id = %s "
-            "AND (%s = 'all' OR kind = %s) "
-            "AND (%s = '' OR title ILIKE %s ESCAPE '\\' OR user_note ILIKE %s ESCAPE '\\' "
-            "OR source_uri ILIKE %s ESCAPE '\\') "
-            "ORDER BY captured_at DESC, id DESC LIMIT %s OFFSET %s",
-            (session["account_id"], kind, kind, q.strip(), search, search, search, limit, offset),
+            f"SELECT {FIELDS} FROM memories WHERE {predicate} "
+            f"ORDER BY {ordering} LIMIT %s OFFSET %s",
+            (*params, limit, offset),
         ).fetchall()
-    return {"data": {"items": rows, "limit": limit, "offset": offset}, "error": None}
+    return {"data": {"items": rows, "total": total, "limit": limit, "offset": offset}, "error": None}
 
 
 @router.get("/{memory_id}")
@@ -95,6 +108,21 @@ def get_memory(memory_id: uuid.UUID, session: dict = Depends(current_session)) -
         ).fetchone()
     if row is None:
         raise HTTPException(404, detail="Memory not found")
+    return {"data": row, "error": None}
+
+
+@router.get("/{memory_id}/content")
+def get_extracted_content(memory_id: uuid.UUID, session: dict = Depends(current_session)) -> dict:
+    with connection() as db:
+        row = db.execute(
+            "SELECT c.body, c.version, c.content_sha256, c.processor_version "
+            "FROM memory_contents c JOIN memories m ON m.id = c.memory_id AND m.account_id = c.account_id "
+            "WHERE c.memory_id = %s AND c.account_id = %s AND c.provenance = 'extracted' AND c.is_active "
+            "ORDER BY c.version DESC LIMIT 1",
+            (memory_id, session["account_id"]),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(404, detail="Extracted content not found")
     return {"data": row, "error": None}
 
 
@@ -127,10 +155,19 @@ def update_memory(memory_id: uuid.UUID, payload: MemoryPatch, session: dict = De
 @router.delete("/{memory_id}")
 def delete_memory(memory_id: uuid.UUID, session: dict = Depends(write_session)) -> dict:
     with connection() as db:
+        keys = [row["object_key"] for row in db.execute(
+            "SELECT object_key FROM memory_assets WHERE memory_id = %s AND account_id = %s",
+            (memory_id, session["account_id"]),
+        ).fetchall()]
+        for key in keys:
+            db.execute("INSERT INTO object_deletions (id, account_id, object_key) VALUES (%s, %s, %s)",
+                       (uuid.uuid4(), session["account_id"], key))
         deleted = db.execute(
             "DELETE FROM memories WHERE id = %s AND account_id = %s",
             (memory_id, session["account_id"]),
         ).rowcount
     if not deleted:
         raise HTTPException(404, detail="Memory not found")
+    for key in keys:
+        cleanup_one(account_id=session["account_id"], object_key=key)
     return {"data": {"deleted": True}, "error": None}

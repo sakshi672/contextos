@@ -25,8 +25,9 @@ Requirements: Node.js 22+, npm, Python 3.13+, and Docker Desktop running Linux c
 3. Generate local settings once: `.venv\Scripts\python -m backend.contextos.local_db init`. If `backend/.env` already exists, keep it; do not reinitialize the password.
 4. Start PostgreSQL and apply migrations: `docker compose --env-file backend/.env up -d postgres`, then `.venv\Scripts\python -m backend.contextos.local_db migrate`.
 5. Start the API in one terminal: `.venv\Scripts\python -m backend.contextos.local_db serve`.
-6. Start the web app in another terminal: `npm.cmd run dev` on Windows or `npm run dev` elsewhere.
-7. Open `http://127.0.0.1:5173/` and create a local account.
+6. Start the extraction worker in another terminal: `.venv\Scripts\python -m backend.contextos.local_db worker`.
+7. Start the web app in a third terminal: `npm.cmd run dev` on Windows or `npm run dev` elsewhere.
+8. Open `http://127.0.0.1:5173/` and create a local account.
 
 The FastAPI service listens only on `127.0.0.1:8766`; Vite forwards `/v1` calls to it. New account and memory data is stored in PostgreSQL's named Docker volume and persists across restarts. `data/context.db` and `data/legacy-snapshot.zip` are retained as local backups from the SQLite prototype; the source had zero memories at cutover. Do not expose the development API to the internet; recovery, rate limits, and release security checks remain on the checklist.
 
@@ -37,8 +38,8 @@ See the [FastAPI/PostgreSQL backend notes](backend/README.md) for API and databa
 - Backend workflow tests: `python -m unittest discover -s tests -v`
 - Frontend type check and production build: `npm.cmd run build` (or `npm run build`)
 
-Current manual flow: register, create a link or note, search for words in its title, URL, or note, edit it, then delete it. Reload and sign back in to check PostgreSQL persistence.
+Current manual flow: register, create a link or note, or upload a UTF-8 TXT/Markdown file. Uploaded documents move from pending to ready when the worker extracts their text. Open a document to view the extracted text or download the private original. Sort, filter, and page through the Library, then use **Export your data** in the sidebar to download an account-scoped ZIP. Reload and sign back in to check PostgreSQL persistence.
 
 ## Current limits
 
-The current web app stores link metadata entered by the user; it does not yet fetch article content. Uploads, browser extension capture, projects, account recovery, export, semantic search, graph, timeline, and AI are tracked in the checklist. The first public release is planned after the competitive feature set and release-readiness work described in the checklist are complete.
+The current web app stores link metadata entered by the user; it does not yet fetch article content. Only TXT and Markdown uploads are supported so far. PDF, DOCX, images, browser extension capture, projects, account recovery, export import, semantic search, graph, timeline, and AI are tracked in the checklist. The first public release is planned after the competitive feature set and release-readiness work described in the checklist are complete.
