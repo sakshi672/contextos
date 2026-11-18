@@ -1,6 +1,7 @@
 """Live PostgreSQL API test for account isolation and the first memory flow."""
 
 import http.cookiejar
+import base64
 from io import BytesIO
 import json
 import os
@@ -82,10 +83,14 @@ class PostgresApiTest(unittest.TestCase):
             with psycopg.connect(cls.database_url) as db:
                 db.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(cls.schema)))
 
-    def call(self, opener, path, method="GET", body=None, csrf=None):
+    def call(self, opener, path, method="GET", body=None, csrf=None, bearer=None, idempotency_key=None):
         headers = {"Content-Type": "application/json"}
         if csrf:
             headers["X-CSRF-Token"] = csrf
+        if bearer:
+            headers["Authorization"] = f"Bearer {bearer}"
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
         request = Request(
             self.base + path, method=method, headers=headers,
             data=json.dumps(body).encode() if body is not None else None,
@@ -448,6 +453,100 @@ class PostgresApiTest(unittest.TestCase):
         with connection() as db:
             self.assertEqual(db.execute("SELECT count(*) AS n FROM object_deletions WHERE object_key = %s",
                                         (key,)).fetchone()["n"], 0)
+
+    def test_extension_pairing_capture_duplicate_project_and_revocation(self):
+        first, csrf = self.register()
+        second, second_csrf = self.register()
+        status, result = self.call(first, "/v1/extension/pairings", "POST", csrf=csrf)
+        self.assertEqual(status, 201, result)
+        code = result["data"]["code"]
+        self.assertEqual(self.call(first, "/v1/extension/pairings", "POST")[0], 403)
+        status, exchange = self.call(first, "/v1/extension/tokens", "POST", {"code": code})
+        self.assertEqual(status, 200, exchange)
+        token = exchange["data"]["token"]
+        self.assertEqual(self.call(first, "/v1/extension/tokens", "POST", {"code": code})[0], 401)
+        self.assertEqual(self.call(first, "/v1/extension/session", bearer=token)[0], 200)
+        payload = {"source_url": "https://example.com/story", "title": "Story",
+                   "readable_text": "Visible story text", "user_note": "Read later", "project_name": "Research"}
+        status, captured = self.call(first, "/v1/captures", "POST", payload, bearer=token)
+        self.assertEqual(status, 201, captured)
+        memory_id = captured["data"]["memory"]["id"]
+        self.assertFalse(captured["data"]["already_saved"])
+        self.assertTrue(captured["data"]["text_saved"])
+        self.assertEqual(self.call(first, f"/v1/memories/{memory_id}/content")[1]["data"]["body"], "Visible story text")
+        self.assertEqual(self.call(second, f"/v1/memories/{memory_id}")[0], 404)
+        status, repeated = self.call(first, "/v1/captures", "POST", payload, bearer=token)
+        self.assertTrue(repeated["data"]["already_saved"])
+        self.assertEqual(repeated["data"]["memory"]["id"], memory_id)
+        self.assertEqual(self.call(first, "/v1/extension/projects", bearer=token)[1]["data"]["names"], ["Research"])
+        status, edited = self.call(first, f"/v1/extension/captures/{memory_id}", "PATCH",
+                                   {"user_note": "Updated", "project_name": "Work"}, bearer=token)
+        self.assertEqual(status, 200, edited)
+        self.assertEqual(edited["data"]["project_name"], "Work")
+        self.assertEqual(edited["data"]["memory"]["user_note"], "Updated")
+        png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/pZkAAAAASUVORK5CYII=")
+        request = Request(self.base + f"/v1/extension/captures/{memory_id}/screenshot", data=png,
+                          method="POST", headers={"Authorization": f"Bearer {token}", "Content-Type": "image/png"})
+        with first.open(request, timeout=5) as response:
+            self.assertEqual(response.status, 201)
+        with first.open(self.base + f"/v1/uploads/{memory_id}/screenshot", timeout=5) as response:
+            self.assertEqual(response.read(), png)
+        self.assertEqual(self.call(second, f"/v1/uploads/{memory_id}/screenshot")[0], 404)
+        with first.open(self.base + "/v1/export", timeout=5) as response:
+            archive = response.read()
+        request = Request(self.base + "/v1/import?format=contextos", data=archive,
+                          method="POST", headers={"X-CSRF-Token": second_csrf, "Content-Type": "application/zip"})
+        with second.open(request, timeout=5) as response:
+            imported = json.load(response)["data"]
+        self.assertEqual((imported["imported"], imported["failed"]), (1, 0), imported)
+        imported_id = imported["items"][0]["memory_id"]
+        self.assertNotEqual(imported_id, memory_id)
+        self.assertEqual(self.call(second, f"/v1/memories/{imported_id}")[1]["data"]["project_name"], "Work")
+        self.assertEqual(self.call(second, f"/v1/memories/{imported_id}/content")[1]["data"]["body"], "Visible story text")
+        with second.open(self.base + f"/v1/uploads/{imported_id}/screenshot", timeout=5) as response:
+            self.assertEqual(response.read(), png)
+        self.assertEqual(self.call(first, "/v1/extension/revoke", "POST", bearer=token)[0], 200)
+        self.assertEqual(self.call(first, "/v1/extension/session", bearer=token)[0], 401)
+        self.assertEqual(self.call(first, f"/v1/memories/{memory_id}", "DELETE", csrf=csrf)[0], 200)
+
+    def test_metadata_only_capture_and_invalid_scheme(self):
+        first, csrf = self.register()
+        code = self.call(first, "/v1/extension/pairings", "POST", csrf=csrf)[1]["data"]["code"]
+        token = self.call(first, "/v1/extension/tokens", "POST", {"code": code})[1]["data"]["token"]
+        bad = {"source_url": "chrome://settings", "title": "Settings"}
+        self.assertEqual(self.call(first, "/v1/captures", "POST", bad, bearer=token)[0], 422)
+        status, result = self.call(first, "/v1/captures", "POST", {
+            "source_url": "https://example.com/restricted", "title": "Restricted",
+            "extraction_reason": "page_access_restricted",
+        }, bearer=token)
+        self.assertEqual(status, 201, result)
+        memory_id = result["data"]["memory"]["id"]
+        self.assertEqual(result["data"]["memory"]["status"], "partial")
+        self.assertEqual(result["data"]["memory"]["capture_reason"], "page_access_restricted")
+        self.assertEqual(self.call(first, f"/v1/memories/{memory_id}")[0], 200)
+
+    def test_capture_retry_idempotency_and_new_content(self):
+        user, csrf = self.register()
+        code = self.call(user, "/v1/extension/pairings", "POST", csrf=csrf)[1]["data"]["code"]
+        token = self.call(user, "/v1/extension/tokens", "POST", {"code": code})[1]["data"]["token"]
+        payload = {"source_url": "https://example.com/updated", "title": "Updating page",
+                   "extraction_reason": "page_access_restricted"}
+        status, first = self.call(user, "/v1/captures", "POST", payload, bearer=token, idempotency_key="first-attempt")
+        self.assertEqual(status, 201, first)
+        memory_id = first["data"]["memory"]["id"]
+        status, repeated = self.call(user, "/v1/captures", "POST", payload, bearer=token,
+                                     idempotency_key="first-attempt")
+        self.assertEqual(repeated["data"]["memory"]["id"], memory_id)
+        self.assertTrue(repeated["data"]["already_saved"])
+        changed = {**payload, "readable_text": "New visible text"}
+        self.assertEqual(self.call(user, "/v1/captures", "POST", changed, bearer=token,
+                                   idempotency_key="first-attempt")[0], 409)
+        status, updated = self.call(user, "/v1/captures", "POST", changed, bearer=token,
+                                    idempotency_key="second-attempt")
+        self.assertEqual(status, 201, updated)
+        self.assertNotEqual(updated["data"]["memory"]["id"], memory_id)
+        self.assertTrue(updated["data"]["text_saved"])
+        self.assertEqual(self.call(user, "/v1/memories?kind=web_page")[1]["data"]["total"], 2)
 
 
 if __name__ == "__main__":

@@ -49,17 +49,17 @@ Mark a box `[x]` only when the task is implemented and its stated behavior has b
 
 ## Phase 2 — One-click browser capture
 
-- [ ] Create a Manifest V3 Chrome/Chromium extension with the minimum permissions needed for explicit tab capture.
-- [ ] Connect the extension to the signed-in web account and handle expired sessions.
-- [ ] Save the current tab with one click: URL, title, capture time, and readable page text where accessible.
-- [ ] Show immediate success, in-progress, duplicate, and failure feedback after the click.
-- [ ] Allow adding or editing a note and project from the extension confirmation panel.
-- [ ] Provide an optional action to save a screenshot of the visible tab area.
-- [ ] Exclude password fields, form values, hidden content, and other unnecessary page data from routine text capture.
-- [ ] Define and implement duplicate behavior for repeated saves of the same URL.
-- [ ] Preserve a usable URL record when extraction fails; show the reason and retry path where possible.
-- [ ] Link from the extension confirmation panel to the saved memory in the web app.
-- [ ] Verify capture on ordinary articles, dynamic pages, restricted pages, and signed-in pages with clear outcomes.
+- [x] Create a Manifest V3 Chrome/Chromium extension using `activeTab`, `scripting`, and `storage`, with local API host access and optional HTTPS API host access. See [extension setup](extension/README.md).
+- [x] Pair with the signed-in web account using a ten-minute code and a revocable, 90-day capture-scoped credential. Expired/revoked credentials return to pairing. Live [API tests](tests/test_postgres_api.py) cover one-time code use and revocation.
+- [x] Implement one-click current-tab save in the popup: URL, title, time, and up to 2 MiB of readable visible text when accessible. Browser verification is still pending below.
+- [x] Implement in-progress, saved, duplicate, metadata-only, and error feedback in the popup.
+- [x] Allow editing a note and assigning or creating one project from the extension confirmation panel. Basic project assignments are included in account export/import.
+- [x] Add an optional visible-tab screenshot action with a private, owner-only file and 20 MiB server limit.
+- [x] Implement a text collector that skips form controls and values, contenteditable, hidden/inert/aria-hidden elements, and script/style content. Manual browser verification remains open below.
+- [x] Repeated saves of the same URL and unchanged readable text/note return the prior memory with `already_saved`; changed content or note creates a new event.
+- [x] Preserve a metadata-only URL/title record with a reason when text access fails, and expose retry in the popup and Memory detail.
+- [x] Link the confirmation panel to the exact saved memory in the web app.
+- [ ] Verify the unpacked extension in Chrome/Chromium on ordinary articles, dynamic pages, restricted pages, signed-in pages, and repeated captures. Check that hidden/form text is absent, screenshot content matches the visible area, and the popup layout feels polished. See [manual matrix](extension/README.md).
 - [ ] **Phase 2 exit:** a supported browser tab is saved with one click and can be found in the Library.
 
 ## Phase 3 — Cross-source capture and extraction

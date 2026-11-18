@@ -1,6 +1,6 @@
 # Context OS
 
-Context OS is a personal memory system for capturing, connecting, and finding information across sources and projects, including when the user remembers only partial clues. The intended first release is a web app and browser extension with source-preserving capture, project memory, an explainable knowledge graph, hybrid retrieval, and a source-grounded assistant. The current implementation is the first **local development slice**: a light-theme library with account sign-in that saves links and notes in PostgreSQL. The complete product scope and sequence are in [ROADMAP.md](ROADMAP.md) and [IMPLEMENTATION_CHECKLIST.md](IMPLEMENTATION_CHECKLIST.md).
+Context OS is a personal memory system for capturing, connecting, and finding information across sources and projects, including when the user remembers only partial clues. The intended first release is a web app and browser extension with source-preserving capture, project memory, an explainable knowledge graph, hybrid retrieval, and a source-grounded assistant. The current implementation is a **local development slice**: a light-theme library with account sign-in, private uploads, import/export, and an unpacked browser extension for explicit tab capture. The complete product scope and sequence are in [ROADMAP.md](ROADMAP.md) and [IMPLEMENTATION_CHECKLIST.md](IMPLEMENTATION_CHECKLIST.md).
 
 ## Planned first release
 
@@ -29,6 +29,8 @@ Requirements: Node.js 22+, npm, Python 3.13+, and Docker Desktop running Linux c
 7. Start the web app in a third terminal: `npm.cmd run dev` on Windows or `npm run dev` elsewhere.
 8. Open `http://127.0.0.1:5173/` and create a local account.
 
+To use one-click browser capture, build the extension with `npm.cmd run build:extension` and follow [the extension setup](extension/README.md). Apply the latest database migrations and restart the API before pairing. Do not publish the web app or extension yet.
+
 The FastAPI service listens only on `127.0.0.1:8766`; Vite forwards `/v1` calls to it. New account and memory data is stored in PostgreSQL's named Docker volume and persists across restarts. `data/context.db` and `data/legacy-snapshot.zip` are retained as local backups from the SQLite prototype; the source had zero memories at cutover. Do not expose the development API to the internet; recovery, rate limits, and release security checks remain on the checklist.
 
 See the [FastAPI/PostgreSQL backend notes](backend/README.md) for API and database details. The older `server/` SQLite API is kept only for snapshot and regression reference; the running web app uses PostgreSQL.
@@ -42,4 +44,4 @@ Current manual flow: register, create a link or note, or upload a UTF-8 TXT/Mark
 
 ## Current limits
 
-The current web app stores link metadata entered by the user; it does not yet fetch article content. Only TXT and Markdown uploads are supported so far. PDF, DOCX, images, browser extension capture, projects, semantic search, graph, timeline, and AI are tracked in the checklist. Hosted email verification, abuse controls, and release security checks are also outstanding. The first public release is planned after the competitive feature set and release-readiness work described in the checklist are complete.
+Manual links currently store metadata entered by the user; they do not fetch article content. The extension can save visible page text after an explicit click, with metadata-only fallback when access is restricted. Only TXT and Markdown uploads are supported so far. PDF, DOCX, image extraction, full project workflows, semantic search, graph, timeline, and AI remain in the checklist. Hosted email verification, abuse controls, browser compatibility checks, and release security checks are also outstanding. The first public release is planned after the competitive feature set and release-readiness work described in the checklist are complete.

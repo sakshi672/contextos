@@ -13,7 +13,7 @@ from .database import connection
 from .object_cleanup import cleanup_one
 
 router = APIRouter(prefix="/v1/memories", tags=["memories"])
-FIELDS = "id, kind, title, source_uri, source_domain, captured_at, status, user_note, created_at, updated_at"
+FIELDS = "id, kind, title, source_uri, source_domain, captured_at, status, user_note, capture_reason, created_at, updated_at"
 
 
 class MemoryInput(BaseModel):
@@ -68,7 +68,7 @@ def create_memory(payload: MemoryInput, session: dict = Depends(write_session)) 
 @router.get("")
 def list_memories(
     session: dict = Depends(current_session),
-    kind: Literal["all", "note", "link", "document"] = "all",
+    kind: Literal["all", "note", "link", "document", "web_page"] = "all",
     q: str = Query(default="", max_length=200),
     sort: Literal["recent", "updated", "title"] = "recent",
     limit: int = Query(default=50, ge=1, le=100),
@@ -106,6 +106,16 @@ def get_memory(memory_id: uuid.UUID, session: dict = Depends(current_session)) -
             f"SELECT {FIELDS} FROM memories WHERE id = %s AND account_id = %s",
             (memory_id, session["account_id"]),
         ).fetchone()
+        if row is not None:
+            row["has_screenshot"] = bool(db.execute(
+                "SELECT 1 FROM memory_assets WHERE memory_id = %s AND account_id = %s AND role = 'screenshot' LIMIT 1",
+                (memory_id, session["account_id"]),
+            ).fetchone())
+            project = db.execute("""SELECT p.name FROM memory_projects mp JOIN projects p ON p.id = mp.project_id
+                WHERE mp.memory_id = %s AND mp.account_id = %s LIMIT 1""",
+                (memory_id, session["account_id"]),
+            ).fetchone()
+            row["project_name"] = project["name"] if project else None
     if row is None:
         raise HTTPException(404, detail="Memory not found")
     return {"data": row, "error": None}
@@ -117,7 +127,7 @@ def get_extracted_content(memory_id: uuid.UUID, session: dict = Depends(current_
         row = db.execute(
             "SELECT c.body, c.version, c.content_sha256, c.processor_version "
             "FROM memory_contents c JOIN memories m ON m.id = c.memory_id AND m.account_id = c.account_id "
-            "WHERE c.memory_id = %s AND c.account_id = %s AND c.provenance = 'extracted' AND c.is_active "
+            "WHERE c.memory_id = %s AND c.account_id = %s AND c.provenance IN ('extracted', 'source') AND c.is_active "
             "ORDER BY c.version DESC LIMIT 1",
             (memory_id, session["account_id"]),
         ).fetchone()
