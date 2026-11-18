@@ -15,7 +15,7 @@ from .object_cleanup import cleanup_one
 from .extract_docx import MIME as DOCX_MIME
 
 router = APIRouter(prefix="/v1/memories", tags=["memories"])
-FIELDS = "id, kind, title, source_uri, source_domain, captured_at, status, user_note, capture_reason, created_at, updated_at"
+FIELDS = "id, kind, title, source_uri, source_domain, captured_at, published_at, status, user_note, capture_reason, capture_method, source_author, source_image_uri, created_at, updated_at"
 
 
 class MemoryInput(BaseModel):
@@ -158,7 +158,7 @@ def get_memory(memory_id: uuid.UUID, session: dict = Depends(current_session)) -
 def get_extracted_content(memory_id: uuid.UUID, session: dict = Depends(current_session)) -> dict:
     with connection() as db:
         row = db.execute(
-            "SELECT c.body, c.version, c.content_sha256, c.processor_version "
+            "SELECT c.body, c.version, c.provenance, c.content_sha256, c.processor_version "
             "FROM memory_contents c JOIN memories m ON m.id = c.memory_id AND m.account_id = c.account_id "
             "WHERE c.memory_id = %s AND c.account_id = %s AND c.provenance IN ('extracted', 'source', 'user') AND c.is_active "
             "ORDER BY c.version DESC LIMIT 1",
@@ -189,23 +189,25 @@ def reprocess_memory(memory_id: uuid.UUID, session: dict = Depends(write_session
     """Queue a fresh extraction from the immutable owned original."""
     account_id = session["account_id"]
     with connection() as db:
-        memory = db.execute("""SELECT kind FROM memories WHERE id = %s AND account_id = %s
+        memory = db.execute("""SELECT kind, capture_method FROM memories WHERE id = %s AND account_id = %s
             FOR UPDATE""", (memory_id, account_id)).fetchone()
         if memory is None:
             raise HTTPException(404, detail="Memory not found")
-        if memory["kind"] not in {"document", "pdf"}:
-            raise HTTPException(422, detail="This memory has no reprocessable file")
+        if memory["kind"] not in {"document", "pdf", "image", "web_page"} or (memory["kind"] == "web_page" and memory["capture_method"] != "manual"):
+            raise HTTPException(422, detail="This memory has no reprocessable source")
         asset = db.execute("""SELECT mime_type FROM memory_assets WHERE memory_id = %s
             AND account_id = %s AND role = 'original' AND storage_state = 'stored' LIMIT 1""",
-            (memory_id, account_id)).fetchone()
-        if asset is None:
+            (memory_id, account_id)).fetchone() if memory["kind"] != "web_page" else None
+        if asset is None and memory["kind"] != "web_page":
             raise HTTPException(409, detail="Original file is unavailable")
-        mime = asset["mime_type"]
-        job_type = ("extract_pdf" if memory["kind"] == "pdf" and mime == "application/pdf" else
+        mime = asset["mime_type"] if asset else None
+        job_type = ("fetch_url" if memory["kind"] == "web_page" else
+                    "extract_image" if memory["kind"] == "image" and mime in {"image/png", "image/jpeg", "image/webp"} else
+                    "extract_pdf" if memory["kind"] == "pdf" and mime == "application/pdf" else
                     "extract_docx" if memory["kind"] == "document" and mime == DOCX_MIME else
                     "extract_text" if memory["kind"] == "document" and mime in {"text/plain", "text/markdown"} else None)
         if job_type is None:
-            raise HTTPException(422, detail="Unsupported original format")
+            raise HTTPException(422, detail="Unsupported source format")
         active = db.execute("""SELECT id FROM extraction_jobs WHERE memory_id = %s
             AND account_id = %s AND status IN ('pending', 'processing') LIMIT 1""",
             (memory_id, account_id)).fetchone()

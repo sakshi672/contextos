@@ -31,7 +31,7 @@ def export_account(background_tasks: BackgroundTasks, session: dict = Depends(cu
         db.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         memories = db.execute(
             "SELECT id, kind, title, source_uri, source_domain, captured_at, published_at, "
-            "status, user_note, capture_reason, created_at, updated_at FROM memories WHERE account_id = %s ORDER BY id",
+            "status, user_note, capture_reason, capture_method, source_author, source_image_uri, created_at, updated_at FROM memories WHERE account_id = %s ORDER BY id",
             (account_id,),
         ).fetchall()
         contents = db.execute(

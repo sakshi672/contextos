@@ -57,7 +57,7 @@ async def upload_image(request: Request, filename: str = Query(min_length=1, max
     if not valid_image(data, mime_type):
         raise HTTPException(422, detail="Image content does not match its file type")
     account_id = session["account_id"]
-    memory_id, asset_id = uuid.uuid4(), uuid.uuid4()
+    memory_id, asset_id, job_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     key = object_key(account_id, memory_id, asset_id)
     target = path_for(key)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -65,7 +65,7 @@ async def upload_image(request: Request, filename: str = Query(min_length=1, max
         target.write_bytes(data)
         with connection() as db:
             row = db.execute("""INSERT INTO memories (id, account_id, kind, title, captured_at, status)
-                VALUES (%s, %s, 'image', %s, %s, 'partial')
+                VALUES (%s, %s, 'image', %s, %s, 'pending')
                 RETURNING id, kind, title, captured_at, status, created_at""",
                 (memory_id, account_id, title, datetime.now(timezone.utc))).fetchone()
             db.execute("""INSERT INTO memory_assets (id, account_id, memory_id, role, object_key,
@@ -73,6 +73,8 @@ async def upload_image(request: Request, filename: str = Query(min_length=1, max
                 VALUES (%s, %s, %s, 'original', %s, %s, %s, %s, %s)""",
                 (asset_id, account_id, memory_id, key, mime_type, size,
                  hashlib.sha256(data).hexdigest(), name))
+            db.execute("""INSERT INTO extraction_jobs (id, account_id, memory_id, job_type)
+                VALUES (%s, %s, %s, 'extract_image')""", (job_id, account_id, memory_id))
     except BaseException:
         delete(key)
         raise

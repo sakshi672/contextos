@@ -64,23 +64,23 @@ Mark a box `[x]` only when the task is implemented and its stated behavior has b
 
 ## Phase 3 — Cross-source capture and extraction
 
-- [ ] Add manual URL capture in the web app with readable-text extraction and available source, author, publication date, and image metadata. Preserve a permitted snapshot or archived copy where practical; clearly show when only extracted text or a URL was saved.
+- [x] Add manual URL capture in the web app with public-network-only, bounded readable-text extraction and available source, author, publication date, and image metadata. Show whether extracted text or only a URL was saved; no full-page archive is retained.
 - [x] Add standalone notes and pasted text/snippet capture. Pasted text is versioned user content that can be edited, searched, and exported/imported.
-- [x] Add PDF upload (50 MiB, 200 pages), worker-based text extraction, page references, and a partial status for pages needing OCR. Preserve the original when extraction fails.
+- [x] Add PDF upload (50 MiB, 200 pages), worker-based text extraction and OCR for up to 40 image-only pages, page references, and a partial status when some pages still lack text. Preserve the original when extraction fails.
 - [x] Add the selected launch document formats (UTF-8 TXT/Markdown and DOCX) with extraction and clear unsupported-format feedback.
 - [x] Add PNG/JPEG/WebP image and screenshot-file upload with a private preview and original filename, MIME type, and size metadata. Browser visible-tab screenshots remain a separate Phase 2 action.
-- [ ] Add OCR for supported images and scanned PDFs, with processing limits and failure states.
-- [x] Build a durable extraction-job queue and pending/processing/ready/partial/failed statuses so text files and PDFs appear in Library before extraction completes.
-- [x] Allow reprocessing a saved TXT/Markdown, DOCX, or PDF original without overwriting the original, prior extracted text, or user-authored notes.
-- [ ] Preserve extraction provenance and content version/hash so derived data can be refreshed safely.
-- [ ] Verify one successful and one failed extraction path for each supported source type.
-- [ ] **Phase 3 exit:** each supported source can be saved, inspected, deleted, and searched when text is available.
+- [x] Add OCR for supported images and scanned PDFs, with pixel, page, and text limits and partial/failed states.
+- [x] Build a durable extraction-job queue and pending/processing/ready/partial/failed statuses so files and manually fetched URLs appear in Library before processing completes.
+- [x] Allow reprocessing saved TXT/Markdown, DOCX, PDF, image, and manual URL sources without overwriting originals, prior extracted text, or user-authored notes.
+- [x] Preserve extraction provenance and content version/hash so derived data can be refreshed safely.
+- [x] Verify successful and failed extraction paths for TXT/Markdown, DOCX, images, PDFs, and manual URLs, including owner isolation and retained prior text on failed refresh.
+- [x] **Phase 3 exit:** each supported source can be saved, inspected, deleted, and searched when text is available. API integration tests cover the source flows; real-browser QA remains tracked under Phase 2.
 
 ## Phase 4 — Search and organization
 
 - [x] Index the current title, URL, and user note fields with SQLite FTS5 and verify search and reindexing after edits.
-- [ ] Index titles, extracted text, user notes, and relevant source metadata for keyword/full-text search.
-- [ ] Build the global Search screen with ranked results and clear reasons each result matched.
+- [x] Index titles, extracted text, user notes, and relevant source metadata for keyword/full-text search.
+- [x] Build the global Search screen with ranked results and clear reasons each result matched.
 - [ ] Add filters for type, source/domain, capture date, project, tag, and collection where applicable.
 - [ ] Add search within a project and preserve filters across result/detail navigation.
 - [ ] Create projects and associate one memory with multiple projects without copying it.
@@ -88,7 +88,7 @@ Mark a box `[x]` only when the task is implemented and its stated behavior has b
 - [ ] Support moving from a search result to the original source or relevant text/page when available.
 - [ ] Handle no results, ambiguous queries, extraction gaps, and deleted items clearly.
 - [ ] Run the retrieval corpus from Phase 0; record correct-result rank and time to find the intended item.
-- [ ] Test search isolation so one account's queries cannot return another account's content.
+- [x] Test search isolation so one account's queries cannot return another account's content.
 - [ ] **Phase 4 exit:** users can reliably recover known items across source types and organize them without duplication.
 
 ## Phase 5 — Context exploration

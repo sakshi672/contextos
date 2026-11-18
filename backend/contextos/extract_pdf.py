@@ -10,6 +10,7 @@ from pypdf.errors import PdfReadError
 from .database import connection
 from .extract_text import PermanentExtractionError
 from .storage import path_for
+from .ocr import MAX_PDF_OCR_PAGES, open_pdf, recognize_pdf_page
 
 MAX_PAGES = 200
 MAX_EXTRACTED_BYTES = 10 * 1024 * 1024
@@ -37,20 +38,38 @@ def handle(job: dict) -> None:
             raise PermanentExtractionError("pdf_page_limit")
         pages = []
         missing_text = False
+        ocr_attempts = 0
+        ocr_reason = None
+        rendered = None
         extracted_bytes = 0
-        for number, page in enumerate(reader.pages, 1):
-            text = (page.extract_text() or "").strip()
-            if not text:
-                missing_text = True
-            else:
-                pages.append((number, text))
-                extracted_bytes += len(text.encode("utf-8"))
-            if extracted_bytes > MAX_EXTRACTED_BYTES:
-                raise PermanentExtractionError("pdf_text_too_large")
+        try:
+            for number, page in enumerate(reader.pages, 1):
+                text = (page.extract_text() or "").strip()
+                if not text:
+                    if ocr_attempts >= MAX_PDF_OCR_PAGES:
+                        ocr_reason = "ocr_page_limit"
+                    else:
+                        ocr_attempts += 1
+                        try:
+                            if rendered is None:
+                                rendered = open_pdf(source)
+                            text = recognize_pdf_page(rendered, number - 1).strip()
+                        except PermanentExtractionError:
+                            ocr_reason = "ocr_failed"
+                if not text:
+                    missing_text = True
+                else:
+                    pages.append((number, text))
+                    extracted_bytes += len(text.encode("utf-8"))
+                if extracted_bytes > MAX_EXTRACTED_BYTES:
+                    raise PermanentExtractionError("pdf_text_too_large")
+        finally:
+            if rendered is not None:
+                rendered.close()
     except (PdfReadError, ValueError, TypeError, OSError) as exc:
         raise PermanentExtractionError("invalid_pdf") from exc
     status = "partial" if missing_text else "ready"
-    reason = "scanned_pdf_needs_ocr" if missing_text else None
+    reason = (ocr_reason or "no_text_detected") if missing_text else None
     body = "\n\n".join(text for _, text in pages)
     content_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
     with connection() as db:

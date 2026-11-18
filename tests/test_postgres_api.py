@@ -21,6 +21,7 @@ import psycopg
 from psycopg import sql
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+from PIL import Image, ImageDraw, ImageFont
 
 from backend.contextos.database import connection
 from backend.contextos.local_db import ENV_FILE, load_env
@@ -30,6 +31,7 @@ from backend.contextos.main import app
 from backend.contextos.storage import path_for
 from backend.contextos.worker import run_once
 from backend.contextos.extract_text import handle as extract_text
+from backend.contextos.manual_urls import checked_url, public_address, fetch_page
 
 
 class PostgresApiTest(unittest.TestCase):
@@ -116,6 +118,49 @@ class PostgresApiTest(unittest.TestCase):
 
     def extract_test_document(self, account_id, memory_id):
         extract_text({"memory_id": uuid.UUID(str(memory_id)), "account_id": uuid.UUID(str(account_id))})
+
+    def test_ranked_search_indexes_content_metadata_and_isolates_accounts(self):
+        first, csrf = self.register()
+        second, second_csrf = self.register()
+        title = self.call(first, "/v1/memories", "POST", {
+            "kind": "note", "title": "Telescope planning", "user_note": "Observing schedule",
+        }, csrf)[1]["data"]["id"]
+        content = self.call(first, "/v1/memories", "POST", {
+            "kind": "snippet", "title": "Night journal", "body": "We carried a telescope to the hill.",
+        }, csrf)[1]["data"]["id"]
+        source = self.call(first, "/v1/memories", "POST", {
+            "kind": "link", "title": "Observatory", "source_uri": "https://astronomy.example.test/guide",
+        }, csrf)[1]["data"]["id"]
+        self.call(second, "/v1/memories", "POST", {
+            "kind": "note", "title": "Telescope belonging to another account",
+        }, second_csrf)
+
+        status, result = self.call(first, "/v1/search?q=telescope")
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["data"]["total"], 2)
+        self.assertEqual([item["id"] for item in result["data"]["items"]], [title, content])
+        self.assertIn("title", result["data"]["items"][0]["match_reasons"])
+        self.assertIn("content", result["data"]["items"][1]["match_reasons"])
+        self.assertIn("[telescope]", result["data"]["items"][1]["snippet"].lower())
+        self.assertEqual(self.call(second, "/v1/search?q=telescope")[1]["data"]["total"], 1)
+        self.assertEqual(self.call(first, "/v1/search?q=astronomy")[1]["data"]["items"][0]["id"], source)
+        self.assertEqual(self.call(first, "/v1/search?q=telescope&kind=snippet")[1]["data"]["items"][0]["id"], content)
+        self.assertEqual(self.call(first, "/v1/search?q=telescope&domain=astronomy.example.test")[1]["data"]["total"], 0)
+        self.assertEqual(self.call(first, "/v1/search?q=telescope&date_from=2099-01-01")[1]["data"]["total"], 0)
+        project_id = uuid.uuid4()
+        with connection() as db:
+            account_id = self.started_accounts[-2]
+            db.execute("INSERT INTO projects (id, account_id, name) VALUES (%s, %s, %s)",
+                       (project_id, account_id, "Sky study"))
+            db.execute("INSERT INTO memory_projects (memory_id, project_id, account_id) VALUES (%s, %s, %s)",
+                       (title, project_id, account_id))
+        self.assertEqual(self.call(first, f"/v1/search?q=telescope&project_id={project_id}")[1]["data"]["items"][0]["id"], title)
+        self.assertEqual(self.call(second, f"/v1/search?q=telescope&project_id={project_id}")[1]["data"]["total"], 0)
+
+        self.call(first, f"/v1/memories/{title}", "PATCH", {"title": "Meteor planning"}, csrf)
+        self.assertEqual(self.call(first, "/v1/search?q=telescope")[1]["data"]["total"], 1)
+        self.call(first, f"/v1/memories/{content}", "DELETE", csrf=csrf)
+        self.assertEqual(self.call(first, "/v1/search?q=telescope")[1]["data"]["total"], 0)
 
     def test_owned_memory_flow_and_csrf(self):
         first, first_csrf = self.register()
@@ -596,7 +641,7 @@ class PostgresApiTest(unittest.TestCase):
         with first.open(request, timeout=5) as response:
             created = json.load(response)["data"]
         memory_id = created["id"]
-        self.assertEqual(created["status"], "partial")
+        self.assertEqual(created["status"], "pending")
         self.assertEqual(self.call(first, "/v1/memories?kind=image")[1]["data"]["total"], 1)
         with first.open(self.base + f"/v1/uploads/{memory_id}/preview", timeout=5) as response:
             self.assertEqual(response.read(), png)
@@ -642,7 +687,7 @@ class PostgresApiTest(unittest.TestCase):
         self.assertTrue(run_once(account_id=account_id))
         detail = self.call(first, f"/v1/memories/{memory_id}")[1]["data"]
         self.assertEqual(detail["status"], "partial")
-        self.assertEqual(detail["capture_reason"], "scanned_pdf_needs_ocr")
+        self.assertEqual(detail["capture_reason"], "no_text_detected")
         self.assertEqual(detail["original_asset"]["mime_type"], "application/pdf")
         passages = self.call(first, f"/v1/memories/{memory_id}/passages")[1]["data"]["items"]
         self.assertEqual(len(passages), 1)
@@ -660,7 +705,7 @@ class PostgresApiTest(unittest.TestCase):
         restored = report["items"][0]["memory_id"]
         restored_pages = self.call(second, f"/v1/memories/{restored}/passages")[1]["data"]["items"]
         self.assertEqual(self.call(second, f"/v1/memories/{restored}")[1]["data"]["capture_reason"],
-                         "scanned_pdf_needs_ocr")
+                         "no_text_detected")
         self.assertEqual(restored_pages[0]["page_number"], 1)
         self.assertIn("Visible telescope text", restored_pages[0]["body"])
         corrupt = Request(self.base + "/v1/uploads/pdf?filename=broken.pdf", data=b"%PDF-not-a-real-file",
@@ -731,6 +776,167 @@ class PostgresApiTest(unittest.TestCase):
         self.assertTrue(run_once(account_id=account_id))
         self.assertEqual(self.call(first, f"/v1/memories/{memory_id}")[1]["data"]["status"], "failed")
         self.assertEqual(self.call(first, f"/v1/memories/{memory_id}/content")[1]["data"]["body"], content["body"])
+
+    def test_manual_url_capture_refresh_failure_and_export(self):
+        first, csrf = self.register()
+        second, other_csrf = self.register()
+        account_id = self.started_accounts[-2]
+        self.assertEqual(self.call(first, "/v1/urls", "POST", {"source_url": "http://127.0.0.1/private"}, csrf)[0], 422)
+        self.assertEqual(self.call(first, "/v1/urls", "POST", {"source_url": "http://localhost/private"}, csrf)[0], 422)
+        self.assertEqual(self.call(first, "/v1/urls", "POST", {"source_url": "https://example.com:8443/"}, csrf)[0], 422)
+        with patch("backend.contextos.manual_urls.socket.getaddrinfo", return_value=[(2, 1, 0, "", ("10.0.0.5", 443))]):
+            with self.assertRaises(ValueError):
+                public_address("example.com", 443)
+        self.assertEqual(checked_url("https://example.com/story")[1], "example.com")
+        created = self.call(first, "/v1/urls", "POST", {"source_url": "https://example.com/story", "user_note": "Read later"}, csrf)
+        self.assertEqual(created[0], 201)
+        memory_id = created[1]["data"]["id"]
+        self.assertEqual(self.call(second, f"/v1/memories/{memory_id}")[0], 404)
+        page = {"title": "A useful story", "body": "Observatory findings", "author": "Ada",
+                "image_uri": "https://example.com/photo.jpg", "published_at": None,
+                "final_url": "https://example.com/story"}
+        with patch("backend.contextos.manual_urls.fetch_page", return_value=page):
+            self.assertTrue(run_once(account_id=account_id))
+        detail = self.call(first, f"/v1/memories/{memory_id}")[1]["data"]
+        self.assertEqual(detail["status"], "ready")
+        self.assertEqual(detail["source_author"], "Ada")
+        self.assertEqual(detail["capture_method"], "manual")
+        self.assertEqual(self.call(first, "/v1/memories?q=Observatory")[1]["data"]["total"], 1)
+        self.assertEqual(self.call(first, f"/v1/memories/{memory_id}/content")[1]["data"]["body"], "Observatory findings")
+        self.assertEqual(self.call(first, f"/v1/memories/{memory_id}/reprocess", "POST", csrf=csrf)[0], 202)
+        with patch("backend.contextos.manual_urls.fetch_page", side_effect=ValueError("http_403")):
+            self.assertTrue(run_once(account_id=account_id))
+        failed = self.call(first, f"/v1/memories/{memory_id}")[1]["data"]
+        self.assertEqual((failed["status"], failed["capture_reason"], failed["user_note"]),
+                         ("partial", "http_403", "Read later"))
+        self.assertEqual(self.call(first, f"/v1/memories/{memory_id}/content")[1]["data"]["body"], "Observatory findings")
+        with first.open(self.base + "/v1/export", timeout=5) as response:
+            exported = response.read()
+        request = Request(self.base + "/v1/import?format=contextos", data=exported,
+                          method="POST", headers={"X-CSRF-Token": other_csrf})
+        with second.open(request, timeout=5) as response:
+            report = json.load(response)["data"]
+        self.assertEqual((report["imported"], report["failed"]), (1, 0), report)
+        restored = self.call(second, f"/v1/memories/{report['items'][0]['memory_id']}")[1]["data"]
+        self.assertEqual((restored["capture_method"], restored["source_author"]), ("manual", "Ada"))
+
+    def test_image_and_scanned_pdf_ocr(self):
+        first, csrf = self.register()
+        second, other_csrf = self.register()
+        account_id = self.started_accounts[-2]
+        image = Image.new("RGB", (900, 160), "white")
+        ImageDraw.Draw(image).text((20, 20), "REMEMBER THE TELESCOPE", fill="black",
+                                   font=ImageFont.truetype("arial.ttf", 48))
+        image_bytes = BytesIO()
+        image.save(image_bytes, format="PNG")
+        request = Request(self.base + "/v1/uploads/image?filename=poster.png", data=image_bytes.getvalue(),
+                          method="POST", headers={"X-CSRF-Token": csrf, "Content-Type": "image/png"})
+        with first.open(request, timeout=5) as response:
+            image_id = json.load(response)["data"]["id"]
+        self.assertTrue(run_once(account_id=account_id))
+        text = self.call(first, f"/v1/memories/{image_id}/content")[1]["data"]["body"]
+        self.assertIn("TELESCOPE", text)
+        self.assertEqual(self.call(first, f"/v1/memories/{image_id}")[1]["data"]["status"], "ready")
+        for format_name, extension, mime in (("JPEG", "jpg", "image/jpeg"), ("WEBP", "webp", "image/webp")):
+            variant = BytesIO()
+            image.save(variant, format=format_name, quality=95)
+            request = Request(self.base + f"/v1/uploads/image?filename=poster.{extension}", data=variant.getvalue(),
+                              method="POST", headers={"X-CSRF-Token": csrf, "Content-Type": mime})
+            with first.open(request, timeout=5) as response:
+                variant_id = json.load(response)["data"]["id"]
+            self.assertTrue(run_once(account_id=account_id))
+            self.assertIn("TELESCOPE", self.call(first, f"/v1/memories/{variant_id}/content")[1]["data"]["body"])
+        pdf_bytes = BytesIO()
+        image.save(pdf_bytes, format="PDF")
+        request = Request(self.base + "/v1/uploads/pdf?filename=scanned.pdf", data=pdf_bytes.getvalue(),
+                          method="POST", headers={"X-CSRF-Token": csrf, "Content-Type": "application/pdf"})
+        with first.open(request, timeout=5) as response:
+            pdf_id = json.load(response)["data"]["id"]
+        self.assertTrue(run_once(account_id=account_id))
+        detail = self.call(first, f"/v1/memories/{pdf_id}")[1]["data"]
+        self.assertEqual(detail["status"], "ready", detail)
+        passage = self.call(first, f"/v1/memories/{pdf_id}/passages")[1]["data"]["items"][0]
+        self.assertEqual(passage["page_number"], 1)
+        self.assertIn("TELESCOPE", passage["body"])
+        blank = BytesIO()
+        Image.new("RGB", (200, 100), "white").save(blank, format="PNG")
+        request = Request(self.base + "/v1/uploads/image?filename=blank.png", data=blank.getvalue(),
+                          method="POST", headers={"X-CSRF-Token": csrf, "Content-Type": "image/png"})
+        with first.open(request, timeout=5) as response:
+            blank_id = json.load(response)["data"]["id"]
+        self.assertTrue(run_once(account_id=account_id))
+        self.assertEqual(self.call(first, f"/v1/memories/{blank_id}")[1]["data"]["status"], "partial")
+        with first.open(self.base + "/v1/export", timeout=5) as response:
+            exported = response.read()
+        request = Request(self.base + "/v1/import?format=contextos", data=exported,
+                          method="POST", headers={"X-CSRF-Token": other_csrf})
+        with second.open(request, timeout=5) as response:
+            report = json.load(response)["data"]
+        self.assertEqual(report["failed"], 0, report)
+        restored = {self.call(second, f"/v1/memories/{item['memory_id']}")[1]["data"]["title"]: item["memory_id"]
+                    for item in report["items"]}
+        self.assertIn("TELESCOPE", self.call(second, f"/v1/memories/{restored['poster']}/content")[1]["data"]["body"])
+        self.assertIn("TELESCOPE", self.call(second, f"/v1/memories/{restored['scanned']}/passages")[1]["data"]["items"][0]["body"])
+        with connection() as db:
+            key = db.execute("SELECT object_key FROM memory_assets WHERE memory_id = %s", (image_id,)).fetchone()["object_key"]
+        path_for(key).write_bytes(b"damaged")
+        self.assertEqual(self.call(first, f"/v1/memories/{image_id}/reprocess", "POST", csrf=csrf)[0], 202)
+        self.assertTrue(run_once(account_id=account_id))
+        self.assertEqual(self.call(first, f"/v1/memories/{image_id}")[1]["data"]["status"], "failed")
+        self.assertEqual(self.call(first, f"/v1/memories/{image_id}/content")[1]["data"]["body"], text)
+
+    def test_manual_fetch_metadata_and_private_redirect(self):
+        class Response:
+            def __init__(self, status, body=b"", location=None):
+                self.status, self.body, self.location = status, body, location
+
+            def getheader(self, name, default=None):
+                return {"Content-Type": "text/html; charset=utf-8", "Location": self.location}.get(name, default)
+
+            def read1(self, size):
+                chunk, self.body = self.body[:size], self.body[size:]
+                return chunk
+
+        class Connection:
+            responses = []
+            calls = []
+
+            def __init__(self, host, port, ip, timeout):
+                self.sock = None
+                self.calls.append((host, port, ip))
+
+            def request(self, method, target, headers):
+                self.calls.append((method, target, headers["Host"]))
+
+            def getresponse(self):
+                return self.responses.pop(0)
+
+            def close(self):
+                pass
+
+        html = (b'<html><head><title>Fallback</title><meta property="og:title" content="Primary title">'
+                b'<meta name="author" content="Grace"><meta property="og:image" content="/cover.png">'
+                b'<meta property="article:published_time" content="2025-02-03T00:00:00Z"></head>'
+                b'<body><article><h1>Orbital news</h1><p>Readable page text</p></article>'
+                b'<script>private form text</script></body></html>')
+        Connection.responses = [Response(200, html)]
+        with patch("backend.contextos.manual_urls.public_address", return_value="93.184.215.14"), \
+             patch("backend.contextos.manual_urls.PinnedHTTPS", Connection):
+            page = fetch_page("https://example.com/story")
+        self.assertEqual(page["title"], "Primary title")
+        self.assertEqual(page["author"], "Grace")
+        self.assertEqual(page["image_uri"], "https://example.com/cover.png")
+        self.assertEqual(page["published_at"].year, 2025)
+        self.assertIn("Readable page text", page["body"])
+        self.assertNotIn("private form text", page["body"])
+        self.assertIn(("example.com", 443, "93.184.215.14"), Connection.calls)
+        Connection.responses = [Response(302, location="http://127.0.0.1/private")]
+        Connection.calls = []
+        with patch("backend.contextos.manual_urls.public_address", return_value="93.184.215.14"), \
+             patch("backend.contextos.manual_urls.PinnedHTTPS", Connection):
+            with self.assertRaisesRegex(ValueError, "private_address"):
+                fetch_page("https://example.com/redirect")
+        self.assertEqual(len([item for item in Connection.calls if len(item) == 3 and item[0] == "example.com"]), 1)
 
 
 if __name__ == "__main__":

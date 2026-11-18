@@ -1,11 +1,11 @@
 # Context OS account export, version 1
 
-`GET /v1/export` downloads a private ZIP for the signed-in account. Keep the ZIP private: it contains source files, note text, and source URLs. The ZIP is an interchange copy, not a database backup. The current version covers notes, pasted-text snippets, links, UTF-8 TXT/Markdown and DOCX documents, PDFs, PNG/JPEG/WebP images, browser captures, screenshots, and initial project assignments. Future project metadata, relationships, annotations, embeddings, and AI artifacts need a later format version.
+`GET /v1/export` downloads a private ZIP for the signed-in account. Keep the ZIP private: it contains source files, note text, and source URLs. The ZIP is an interchange copy, not a database backup. The current version covers notes, pasted-text snippets, links, UTF-8 TXT/Markdown and DOCX documents, PDFs, PNG/JPEG/WebP images and their OCR text, manual webpage captures, browser captures, screenshots, and initial project assignments. Future project metadata, relationships, annotations, embeddings, and AI artifacts need a later format version.
 
 | Entry | Content |
 | --- | --- |
 | `manifest.json` | `format: "contextos-account-export"`, `version: 1`, UTC `created_at`, and memory/content/asset counts. |
-| `memories.jsonl` | One JSON object per memory: source type, title, URL/domain, captured and published dates, processing status, user note, and record dates. |
+| `memories.jsonl` | One JSON object per memory: source type, title, URL/domain, captured and published dates, processing status, user note, capture method (`manual` or `browser`), available source author and image URL, and record dates. Older version 1 rows may omit the newer metadata. |
 | `contents.jsonl` | Extracted or other versioned content with memory ID, provenance, body, SHA-256, processor version, status, active flag, and creation date. |
 | `passages.jsonl` | Page-aware extracted passages with content ID, ordinal, page number, and offsets. Optional in older version 1 ZIPs. |
 | `assets.jsonl` | Original-file metadata: memory ID, role, MIME type, byte count, SHA-256, source filename, creation date, and ZIP path. Internal storage keys are excluded. |
