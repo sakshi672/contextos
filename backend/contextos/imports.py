@@ -164,6 +164,12 @@ def import_record(account_id, row, contents, passages, assets, originals, projec
             raise ValueError("Invalid image original")
     if kind == "web_page" and (len(assets) > 1 or any(asset["role"] != "screenshot" for asset in assets)):
         raise ValueError("Web page assets must be a single screenshot")
+    if kind == "web_page" and row.get("capture_method", "browser") not in {"browser", "manual"}:
+        raise ValueError("Invalid page capture method")
+    if kind == "web_page" and row.get("source_image_uri"):
+        image_url = urlsplit(row["source_image_uri"])
+        if image_url.scheme not in {"http", "https"} or not image_url.hostname or len(row["source_image_uri"]) > 2048:
+            raise ValueError("Invalid source image URL")
     if kind in {"note", "link", "snippet"} and assets:
         raise ValueError("This memory type cannot include files")
     if kind == "snippet":
@@ -203,13 +209,23 @@ def import_record(account_id, row, contents, passages, assets, originals, projec
                 if project_name:
                     assign_project(db, account_id, duplicate["id"], project_name)
                 return "duplicate", str(duplicate["id"])
+            has_extracted = any(c.get("provenance") == "extracted" and c.get("is_active") for c in contents)
+            status = (row.get("status", "partial") if kind == "web_page" else
+                      row.get("status", "ready") if kind in {"document", "pdf", "image"} and has_extracted else
+                      "pending" if kind in {"document", "pdf", "image"} else "ready")
+            if status not in {"pending", "ready", "partial"}:
+                status = "pending" if kind == "web_page" and row.get("capture_method") == "manual" else "partial"
             db.execute("""INSERT INTO memories (id, account_id, kind, title, source_uri, source_domain,
-                captured_at, published_at, status, user_note, capture_reason, created_at, updated_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                captured_at, published_at, status, user_note, capture_reason, capture_method,
+                source_author, source_image_uri, created_at, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (memory_id, account_id, kind, title, uri, domain, timestamp(row.get("captured_at")),
                  timestamp(row["published_at"]) if row.get("published_at") else None,
-                 row.get("status") if kind in {"web_page", "pdf", "document"} and row.get("status") in {"ready", "partial"} and (kind == "web_page" or any(c.get("provenance") == "extracted" and c.get("is_active") for c in contents)) else "partial" if kind == "image" else "pending" if kind in {"pdf", "document"} else "ready",
+                 status,
                  note, row.get("capture_reason") if kind in {"web_page", "pdf"} else None,
+                 row.get("capture_method", "browser") if kind == "web_page" else "browser",
+                 row.get("source_author") if kind == "web_page" else None,
+                 row.get("source_image_uri") if kind == "web_page" else None,
                  timestamp(row.get("created_at")), timestamp(row.get("updated_at"))))
             for asset in assets:
                 asset_id = uuid.uuid4()
@@ -254,6 +270,12 @@ def import_record(account_id, row, contents, passages, assets, originals, projec
                 job_type = "extract_docx" if assets[0]["mime_type"] == DOCX_MIME else "extract_text"
                 db.execute("""INSERT INTO extraction_jobs (id, account_id, memory_id, job_type)
                     VALUES (%s, %s, %s, %s)""", (uuid.uuid4(), account_id, memory_id, job_type))
+            if kind == "image" and not has_extracted:
+                db.execute("""INSERT INTO extraction_jobs (id, account_id, memory_id, job_type)
+                    VALUES (%s, %s, %s, 'extract_image')""", (uuid.uuid4(), account_id, memory_id))
+            if kind == "web_page" and row.get("capture_method") == "manual" and status == "pending":
+                db.execute("""INSERT INTO extraction_jobs (id, account_id, memory_id, job_type)
+                    VALUES (%s, %s, %s, 'fetch_url')""", (uuid.uuid4(), account_id, memory_id))
             if project_name:
                 assign_project(db, account_id, memory_id, project_name)
     except BaseException:

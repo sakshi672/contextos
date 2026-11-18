@@ -7,11 +7,14 @@ from .jobs import claim_one, finish
 from .extract_text import PermanentExtractionError, handle as extract_text
 from .extract_pdf import handle as extract_pdf
 from .extract_docx import handle as extract_docx
+from .manual_urls import handle as fetch_url
+from .extract_image import handle as extract_image
 from .object_cleanup import cleanup_one
 
 log = logging.getLogger(__name__)
 
-HANDLERS = {"extract_text": extract_text, "extract_pdf": extract_pdf, "extract_docx": extract_docx}
+HANDLERS = {"extract_text": extract_text, "extract_pdf": extract_pdf, "extract_docx": extract_docx,
+            "fetch_url": fetch_url, "extract_image": extract_image}
 
 
 def run_once(account_id=None) -> bool:
