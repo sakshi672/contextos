@@ -64,14 +64,13 @@ def project_for(db, account_id, name: str | None):
 
 
 def assign_project(db, account_id, memory_id, name: str | None):
-    db.execute("DELETE FROM memory_projects WHERE account_id = %s AND memory_id = %s", (account_id, memory_id))
     project_id = project_for(db, account_id, name)
     if project_id:
-        db.execute("INSERT INTO memory_projects (account_id, memory_id, project_id) VALUES (%s,%s,%s)",
+        db.execute("INSERT INTO memory_projects (account_id, memory_id, project_id) VALUES (%s,%s,%s) ON CONFLICT DO NOTHING",
                    (account_id, memory_id, project_id))
 
 
-def capture_result(db, account_id, memory_id, already_saved: bool):
+def capture_result(db, account_id, memory_id, already_saved: bool, preferred_project: str | None = None):
     row = db.execute("""SELECT id, title, source_uri, captured_at, status, user_note, capture_reason FROM memories
         WHERE id = %s AND account_id = %s""", (memory_id, account_id)).fetchone()
     project = db.execute("""SELECT p.name FROM memory_projects mp JOIN projects p ON p.id = mp.project_id
@@ -79,7 +78,7 @@ def capture_result(db, account_id, memory_id, already_saved: bool):
     content = db.execute("""SELECT 1 FROM memory_contents WHERE account_id = %s AND memory_id = %s
         AND provenance = 'source' AND is_active LIMIT 1""", (account_id, memory_id)).fetchone()
     return {"memory": row, "already_saved": already_saved, "text_saved": bool(content),
-            "project_name": project["name"] if project else None}
+            "project_name": preferred_project or (project["name"] if project else None)}
 
 
 @router.post("/captures", status_code=201)
@@ -130,7 +129,7 @@ def create_capture(payload: CaptureInput, idempotency_key: str | None = Header(d
         if idempotency_key:
             db.execute("INSERT INTO capture_requests (account_id, request_key, request_hash, memory_id) VALUES (%s,%s,%s,%s)",
                        (account_id, idempotency_key, body_hash, memory_id))
-        result = capture_result(db, account_id, memory_id, already_saved)
+        result = capture_result(db, account_id, memory_id, already_saved, payload.project_name)
     return {"data": result, "error": None}
 
 
@@ -149,7 +148,7 @@ def edit_capture(memory_id: uuid.UUID, payload: CapturePatch,
                        (payload.user_note or "", memory_id, session["account_id"]))
         if "project_name" in payload.model_fields_set:
             assign_project(db, session["account_id"], memory_id, payload.project_name)
-        result = capture_result(db, session["account_id"], memory_id, False)
+        result = capture_result(db, session["account_id"], memory_id, False, payload.project_name)
     return {"data": result, "error": None}
 
 

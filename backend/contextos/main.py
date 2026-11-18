@@ -14,6 +14,7 @@ from .extension_auth import router as extension_router
 from .captures import router as captures_router
 from .manual_urls import router as manual_urls_router
 from .search import router as search_router
+from .organization import router as organization_router
 
 app = FastAPI(title="Context OS API", version="0.1.0", docs_url=None, redoc_url=None)
 app.include_router(auth_router)
@@ -26,6 +27,7 @@ app.include_router(extension_router)
 app.include_router(captures_router)
 app.include_router(manual_urls_router)
 app.include_router(search_router)
+app.include_router(organization_router)
 
 
 @app.middleware("http")

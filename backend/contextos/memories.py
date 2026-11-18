@@ -13,6 +13,7 @@ from .auth import current_session, write_session
 from .database import connection
 from .object_cleanup import cleanup_one
 from .extract_docx import MIME as DOCX_MIME
+from .organization import assignments_for
 
 router = APIRouter(prefix="/v1/memories", tags=["memories"])
 FIELDS = "id, kind, title, source_uri, source_domain, captured_at, published_at, status, user_note, capture_reason, capture_method, source_author, source_image_uri, created_at, updated_at"
@@ -149,6 +150,7 @@ def get_memory(memory_id: uuid.UUID, session: dict = Depends(current_session)) -
                 (memory_id, session["account_id"]),
             ).fetchone()
             row["project_name"] = project["name"] if project else None
+            row["organization"] = assignments_for(db, session["account_id"], memory_id)
     if row is None:
         raise HTTPException(404, detail="Memory not found")
     return {"data": row, "error": None}

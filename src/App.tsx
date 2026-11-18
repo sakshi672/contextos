@@ -5,6 +5,8 @@ import {
   Plus, Search, Sparkles, Trash2, X,
 } from 'lucide-react'
 import { api, type Session } from './api'
+import { OrganizationPicker, OrganizationView, emptyOrganization,
+  type Organization, type OrgEntity } from './Organization'
 
 type Kind = 'note' | 'link' | 'snippet'
 type MemoryKind = Kind | 'document' | 'web_page' | 'image' | 'pdf'
@@ -31,6 +33,7 @@ type Memory = {
   match_reasons?: string[]
   snippet?: string | null
   page_number?: number | null
+  organization?: Organization
 }
 type StoredMemory = {
   id: string; title: string; kind: MemoryKind; source_uri: string | null;
@@ -45,6 +48,7 @@ type StoredMemory = {
   match_reasons?: string[]
   snippet?: string | null
   page_number?: number | null
+  organization?: Organization
 }
 type Draft = { title: string; kind: Kind; source_url: string; note: string; body: string }
 
@@ -58,7 +62,8 @@ function fromStored(row: StoredMemory): Memory {
     project_name: row.project_name, original_asset: row.original_asset,
     capture_method: row.capture_method, source_author: row.source_author,
     source_image_uri: row.source_image_uri, published_at: row.published_at,
-    match_reasons: row.match_reasons, snippet: row.snippet, page_number: row.page_number }
+    match_reasons: row.match_reasons, snippet: row.snippet, page_number: row.page_number,
+    organization: row.organization }
 }
 
 function formatDate(value: string) {
@@ -78,29 +83,42 @@ function memoryStatus(item: Memory) {
   return item.note || (item.kind === 'snippet' ? 'Ready to read' : 'No note added')
 }
 
-function SearchResults({ items, onOpen }: { items: Memory[]; onOpen: (id: string) => void }) {
+function SearchResults({ items, matchMode, onOpen }: { items: Memory[]; matchMode: string; onOpen: (id: string, page?: number | null) => void }) {
   if (!items.length) return null
-  return <div className="search-results">{items.map(item => <button className="search-result" key={item.id} onClick={() => onOpen(item.id)}>
+  return <div className="search-results">{matchMode === 'some_words' ? <p className="search-guidance">No result matched every word. Showing partial word matches, ranked by strength.</p> : items.length > 1 && <p className="search-guidance">Ranked by match strength. Use filters to narrow similar results.</p>}{items.map(item => <div className="search-result" key={item.id}><button className="search-result-main" onClick={() => onOpen(item.id, item.page_number)}>
     <span className={`memory-icon ${item.kind}`}>{['link', 'web_page'].includes(item.kind) ? <Link2 size={18} /> : <FileText size={18} />}</span>
     <span className="search-result-copy"><strong>{item.title}</strong><span className="search-result-meta">{item.kind.replace('_', ' ')} · {formatDate(item.captured_at)}{item.page_number ? ` · Page ${item.page_number}` : ''}</span>
       {item.snippet && <span className="search-snippet">{item.snippet}</span>}
-      <span className="search-reasons">Matched in {item.match_reasons?.map(reason => reason === 'source' ? 'source details' : reason === 'content' ? 'saved text' : reason).join(', ') || 'saved memory'}</span>
-    </span><ArrowRight size={16} className="row-arrow" />
-  </button>)}</div>
+      {!!item.match_reasons?.length && <span className="search-reasons">Matched in {item.match_reasons.map(reason => reason === 'source' ? 'source details' : reason === 'content' ? 'saved text' : reason).join(', ')}</span>}
+      {item.status !== 'ready' && <span className="search-gap">Saved text {item.status === 'pending' || item.status === 'processing' ? 'is still processing' : 'may be incomplete'}.</span>}
+    </span><ArrowRight size={16} className="row-arrow" /></button>
+    {item.source_url && <a className="search-source" href={item.source_url} target="_blank" rel="noopener noreferrer">Open source <ExternalLink size={13} /></a>}
+    {['document', 'pdf', 'image'].includes(item.kind) && <a className="search-source" href={`/v1/uploads/${item.id}/original`}>Open original <ExternalLink size={13} /></a>}
+  </div>)}</div>
+}
+
+function SearchEmpty({ query }: { query: string }) {
+  return <div className="search-prompt"><Search size={26} /><h3>No matching memories</h3><p>{query.trim() ? 'Try fewer words or a different phrase. Source text may be unavailable if extraction failed or is still processing.' : 'No memories match these filters yet. Clear a filter or save a new memory.'}</p></div>
 }
 
 function App({ session, onSignOut }: { session: Session; onSignOut: () => void }) {
   const [items, setItems] = useState<Memory[]>([])
   const [query, setQuery] = useState('')
-  const [view, setView] = useState<'library' | 'search'>('library')
+  const [view, setView] = useState<'library' | 'search' | 'organization'>('library')
   const [searchDomain, setSearchDomain] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+  const [projectId, setProjectId] = useState('')
+  const [tagId, setTagId] = useState('')
+  const [collectionId, setCollectionId] = useState('')
+  const [organization, setOrganization] = useState<Organization>(emptyOrganization)
   const [filter, setFilter] = useState<Filter>('all')
   const [sort, setSort] = useState<Sort>('recent')
   const [page, setPage] = useState(0)
   const [total, setTotal] = useState(0)
+  const [matchMode, setMatchMode] = useState('all_words')
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [targetPage, setTargetPage] = useState<number | null>(null)
   const [directMemory, setDirectMemory] = useState<Memory | null>(null)
   const [pairingOpen, setPairingOpen] = useState(false)
   const [pairingCode, setPairingCode] = useState('')
@@ -134,7 +152,7 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
     const currentRequest = ++requestId.current
     if (!silent) { setLoading(true); setError('') }
     try {
-      if (view === 'search' && !q.trim()) {
+      if (view === 'organization') {
         setItems([]); setTotal(0); setLoading(false); return
       }
       const params = new URLSearchParams({ q, kind,
@@ -144,20 +162,37 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
         if (searchDomain.trim()) params.set('domain', searchDomain.trim())
         if (dateFrom) params.set('date_from', dateFrom)
         if (dateTo) params.set('date_to', dateTo)
+        if (projectId) params.set('project_id', projectId)
+        if (tagId) params.set('tag_id', tagId)
+        if (collectionId) params.set('collection_id', collectionId)
       }
-      const result = await api<{ items: StoredMemory[]; total: number }>(`/${view === 'search' ? 'search' : 'memories'}?${params}`)
-      if (currentRequest === requestId.current) { setItems(result.items.map(fromStored)); setTotal(result.total) }
+      const result = await api<{ items: StoredMemory[]; total: number; match_mode?: string }>(`/${view === 'search' ? 'search' : 'memories'}?${params}`)
+      if (currentRequest === requestId.current) { setItems(result.items.map(fromStored)); setTotal(result.total); setMatchMode(result.match_mode ?? 'all_words') }
     } catch (cause) {
       if (!silent && currentRequest === requestId.current) setError(cause instanceof Error ? cause.message : 'Could not load memories.')
     } finally {
       if (!silent && currentRequest === requestId.current) setLoading(false)
     }
-  }, [query, filter, page, sort, view, searchDomain, dateFrom, dateTo])
+  }, [query, filter, page, sort, view, searchDomain, dateFrom, dateTo, projectId, tagId, collectionId])
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void load(query, filter, page, sort) }, 180)
     return () => window.clearTimeout(timer)
-  }, [query, filter, page, sort, view, searchDomain, dateFrom, dateTo, load])
+  }, [query, filter, page, sort, view, searchDomain, dateFrom, dateTo, projectId, tagId, collectionId, load])
+
+  const refreshOrganization = useCallback(async () => {
+    const result = await api<Organization>('/organization')
+    setOrganization(result)
+  }, [])
+  useEffect(() => { void refreshOrganization().catch(() => setError('Could not load projects, tags, and collections.')) }, [refreshOrganization, view])
+
+  function openScope(entity: OrgEntity, id: string) {
+    setProjectId(entity === 'projects' ? id : '')
+    setTagId(entity === 'tags' ? id : '')
+    setCollectionId(entity === 'collections' ? id : '')
+    setQuery(''); setFilter('all'); setPage(0); setView('search')
+    window.requestAnimationFrame(() => searchRef.current?.focus())
+  }
 
   useEffect(() => {
     const id = new URLSearchParams(window.location.search).get('memory')
@@ -170,7 +205,7 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
     let active = true
     api<StoredMemory>(`/memories/${selectedId}`).then(row => {
       if (active) setDirectMemory(fromStored(row))
-    }).catch(() => { if (active) setError('That memory is unavailable or belongs to another account.') })
+    }).catch(() => { if (active) { setSelectedId(null); setDirectMemory(null); setError('This memory is no longer available. Refresh the results to continue.'); void load(query, filter, page, sort, true) } })
     return () => { active = false }
   }, [selectedId, selectedListStatus])
 
@@ -217,6 +252,11 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
       .catch(() => { if (active) setPdfPages([]) })
     return () => { active = false }
   }, [selected?.id, selected?.kind, selected?.status])
+
+  useEffect(() => {
+    if (!selectedId || !targetPage || !pdfPages.length) return
+    window.requestAnimationFrame(() => document.getElementById(`pdf-page-${targetPage}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }))
+  }, [selectedId, targetPage, pdfPages])
 
   useEffect(() => {
     if (!items.some(item => item.status === 'pending' || item.status === 'processing')) return
@@ -371,6 +411,7 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
       setToast(`Imported ${result.imported} · ${result.duplicates} duplicates · ${result.failed} failed`)
       setPage(0)
       await load(query, filter, 0, sort)
+      void refreshOrganization().catch(() => setError('Import finished, but organization could not refresh.'))
       if (result.failed) {
         const firstFailure = result.items.find(item => item.status === 'failed')
         setError(`${result.failed} import item${result.failed === 1 ? '' : 's'} failed. First failure (item ${(firstFailure?.index ?? 0) + 1}): ${firstFailure?.reason ?? 'Unsupported data'}`)
@@ -421,6 +462,7 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
       const nextPage = page > 0 && items.length === 1 ? page - 1 : page
       if (nextPage !== page) setPage(nextPage)
       await load(query, filter, nextPage, sort)
+      void refreshOrganization().catch(() => setError('Memory deleted, but organization could not refresh.'))
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not delete memory.')
     }
@@ -448,7 +490,7 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
           <button className={view === 'library' ? 'nav-item active' : 'nav-item'} onClick={() => { setView('library'); setQuery(''); setPage(0); setSelectedId(null); setMobileNav(false) }}><Compass size={18} /> Library</button>
           <button className={view === 'search' ? 'nav-item active' : 'nav-item'} onClick={() => { setView('search'); setPage(0); setSelectedId(null); setMobileNav(false); window.requestAnimationFrame(() => searchRef.current?.focus()) }}><Search size={18} /> Search <span className="nav-shortcut">⌘ K</span></button>
           <div className="nav-label nav-label-spaced">EXPLORE</div>
-          <button className="nav-item" disabled title="Projects are planned for a later phase"><FolderKanban size={18} /> Projects <span className="soon">Soon</span></button>
+          <button className={view === 'organization' ? 'nav-item active' : 'nav-item'} onClick={() => { setView('organization'); setSelectedId(null); setMobileNav(false) }}><FolderKanban size={18} /> Projects & organization</button>
           <button className="nav-item" disabled title="Timeline is planned for a later phase"><Clock3 size={18} /> Timeline <span className="soon">Soon</span></button>
           <button className="nav-item" disabled title="Connections are planned for a later phase"><GitBranch size={18} /> Connections <span className="soon">Soon</span></button>
           <div className="sidebar-divider" />
@@ -477,13 +519,14 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
 
       <div className="main-shell">
         <header className="topbar">
-          <div className="topbar-left"><button className="icon-button mobile-menu" aria-label="Open menu" onClick={() => setMobileNav(true)}><Menu size={20} /></button><span className="breadcrumb-muted">Workspace</span><span className="breadcrumb-separator">/</span><span className="breadcrumb-current">{view === 'search' ? 'Search' : 'Library'}</span></div>
+          <div className="topbar-left"><button className="icon-button mobile-menu" aria-label="Open menu" onClick={() => setMobileNav(true)}><Menu size={20} /></button><span className="breadcrumb-muted">Workspace</span><span className="breadcrumb-separator">/</span><span className="breadcrumb-current">{view === 'search' ? 'Search' : view === 'organization' ? 'Projects' : 'Library'}</span></div>
           <div className="topbar-right"><span className="topbar-caption">{session.email}</span><button className="signout-button" onClick={onSignOut}>Sign out</button><div className="top-avatar">{session.email[0]?.toUpperCase()}</div></div>
         </header>
 
         <main className="page">
-          <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-dot" /> YOUR KNOWLEDGE, IN ONE PLACE</div><h1>{view === 'search' ? <>Find what matters<br /><em>again.</em></> : <>Good things are worth<br /><em>remembering.</em></>}</h1><p className="page-intro">{view === 'search' ? 'Search titles, notes, sources, and saved text.' : 'Everything you save, ready when you need it.'}</p></div><button className="primary-button heading-save" onClick={() => openNew('link')}><Plus size={17} /> New memory</button></div>
+          <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-dot" /> YOUR KNOWLEDGE, IN ONE PLACE</div><h1>{view === 'search' ? <>Find what matters<br /><em>again.</em></> : view === 'organization' ? <>Keep ideas<br /><em>connected.</em></> : <>Good things are worth<br /><em>remembering.</em></>}</h1><p className="page-intro">{view === 'search' ? 'Search titles, notes, sources, and saved text.' : view === 'organization' ? 'Projects, collections, and tags give your memories a home.' : 'Everything you save, ready when you need it.'}</p></div><button className="primary-button heading-save" onClick={() => openNew('link')}><Plus size={17} /> New memory</button></div>
 
+          {view === 'organization' ? <OrganizationView data={organization} refresh={refreshOrganization} onScope={openScope} /> :
           <div className="content-panel">
           <div className="content-header"><div><div className="section-kicker">{view === 'search' ? 'FIND A MEMORY' : 'YOUR COLLECTION'}</div><h2>{view === 'search' ? 'Search results' : 'All memories'} <span className="item-total">{total}</span></h2></div><button className="text-action" onClick={() => openNew('link')}>Add something <ArrowRight size={16} /></button></div>
             <div className="toolbar"><div className="search-box"><Search size={19} /><input ref={searchRef} aria-label="Search memories" placeholder="Search anything you remember..." value={query} onChange={event => { setQuery(event.target.value); setPage(0) }} /><span className="keycap"><Command size={12} /> K</span></div><div className="filters" role="group" aria-label="Memory type"><button className={filter === 'all' ? 'filter active' : 'filter'} onClick={() => { setFilter('all'); setPage(0) }}>All</button><button className={filter === 'web_page' ? 'filter active' : 'filter'} onClick={() => { setFilter('web_page'); setPage(0) }}>Web pages</button><button className={filter === 'link' ? 'filter active' : 'filter'} onClick={() => { setFilter('link'); setPage(0) }}>Links</button><button className={filter === 'note' ? 'filter active' : 'filter'} onClick={() => { setFilter('note'); setPage(0) }}>Notes</button><button className={filter === 'snippet' ? 'filter active' : 'filter'} onClick={() => { setFilter('snippet'); setPage(0) }}>Pasted text</button><button className={filter === 'image' ? 'filter active' : 'filter'} onClick={() => { setFilter('image'); setPage(0) }}>Images</button><button className={filter === 'pdf' ? 'filter active' : 'filter'} onClick={() => { setFilter('pdf'); setPage(0) }}>PDFs</button><button className={filter === 'document' ? 'filter active' : 'filter'} onClick={() => { setFilter('document'); setPage(0) }}>Files</button></div>{view === 'library' && <select className="sort-select" aria-label="Sort memories" value={sort} onChange={event => { setSort(event.target.value as Sort); setPage(0) }}><option value="recent">Newest</option><option value="updated">Updated</option><option value="title">Title</option></select>}</div>
@@ -492,19 +535,22 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
               <label>Source domain<input aria-label="Source domain" placeholder="example.com" value={searchDomain} onChange={event => { setSearchDomain(event.target.value); setPage(0) }} /></label>
               <label>From<input aria-label="Captured from date" type="date" value={dateFrom} onChange={event => { setDateFrom(event.target.value); setPage(0) }} /></label>
               <label>To<input aria-label="Captured through date" type="date" value={dateTo} onChange={event => { setDateTo(event.target.value); setPage(0) }} /></label>
-              {(searchDomain || dateFrom || dateTo) && <button className="text-action" onClick={() => { setSearchDomain(''); setDateFrom(''); setDateTo(''); setPage(0) }}>Clear filters</button>}
+              <label>Project<select aria-label="Project filter" value={projectId} onChange={event => { setProjectId(event.target.value); setPage(0) }}><option value="">Any project</option>{organization.projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+              <label>Tag<select aria-label="Tag filter" value={tagId} onChange={event => { setTagId(event.target.value); setPage(0) }}><option value="">Any tag</option>{organization.tags.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+              <label>Collection<select aria-label="Collection filter" value={collectionId} onChange={event => { setCollectionId(event.target.value); setPage(0) }}><option value="">Any collection</option>{organization.collections.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+              {(searchDomain || dateFrom || dateTo || projectId || tagId || collectionId) && <button className="text-action" onClick={() => { setSearchDomain(''); setDateFrom(''); setDateTo(''); setProjectId(''); setTagId(''); setCollectionId(''); setPage(0) }}>Clear filters</button>}
             </div>}
             {error && <div className="inline-error" role="alert">{error}<button onClick={() => void load()}>Try again</button></div>}
-            {loading ? <div className="loading-state"><div className="spinner" /> Gathering your memories...</div> : view === 'search' && !query.trim() ? <div className="search-prompt"><Search size={26} /><h3>What are you looking for?</h3><p>Search a title, a phrase from saved text, or a source you remember.</p></div> : view === 'search' && items.length ? <SearchResults items={items} onOpen={setSelectedId} /> : items.length ? <div className="memory-list">{items.map(item => <button className="memory-row" key={item.id} onClick={() => setSelectedId(item.id)}><span className={`memory-icon ${item.kind}`}>{['link', 'web_page'].includes(item.kind) ? <Link2 size={18} /> : <FileText size={18} />}</span><span className="memory-copy"><span className="memory-title">{item.title}</span><span className="memory-subline">{['link', 'web_page'].includes(item.kind) ? domain(item.source_url) : item.kind === 'document' ? 'Document' : item.kind === 'pdf' ? 'PDF' : item.kind === 'image' ? 'Image' : item.kind === 'snippet' ? 'Pasted text' : 'Personal note'}<span className="subline-dot">·</span>{memoryStatus(item)}</span></span><span className="memory-date">{formatDate(item.captured_at)}</span><ArrowRight size={16} className="row-arrow" /></button>)}</div> : <div className="empty-state"><div className="empty-art" aria-hidden="true"><div className="art-circle art-circle-one" /><div className="art-circle art-circle-two" /><div className="art-card art-card-back"><span /><span /></div><div className="art-card art-card-front"><BookOpen size={24} /><span /><span /></div><div className="art-sparkle"><Sparkles size={18} /></div></div><h3>{query ? 'Nothing matched that memory' : 'Your memory starts here'}</h3><p>{query ? 'Try a different phrase or change the filter.' : 'Save a useful link, note, or pasted passage. We’ll make it easy to find again.'}</p>{!query && <div className="empty-actions"><button className="primary-button" onClick={() => openNew('link')}><Link2 size={16} /> Save a link</button><button className="secondary-button" onClick={() => { setEditorError(''); setManualUrlOpen(true) }}><Link2 size={16} /> Save webpage</button><button className="secondary-button" onClick={() => openNew('note')}><FileText size={16} /> Write a note</button><button className="secondary-button" onClick={() => openNew('snippet')}><FileText size={16} /> Paste text</button><button className="secondary-button" onClick={() => pdfRef.current?.click()}><FileText size={16} /> Upload PDF</button><button className="secondary-button" onClick={() => docxRef.current?.click()}><FileText size={16} /> Upload DOCX</button><button className="secondary-button" onClick={() => imageRef.current?.click()}><FileText size={16} /> Upload image</button><button className="secondary-button" onClick={() => fileRef.current?.click()}><FileText size={16} /> Upload text</button></div>}</div>}
+            {loading ? <div className="loading-state"><div className="spinner" /> Gathering your memories...</div> : view === 'search' && !query.trim() && !projectId && !tagId && !collectionId && !searchDomain && !dateFrom && !dateTo ? <div className="search-prompt"><Search size={26} /><h3>What are you looking for?</h3><p>Search a title, a phrase from saved text, or a source you remember.</p></div> : view === 'search' && items.length ? <SearchResults items={items} matchMode={matchMode} onOpen={(id, page) => { setTargetPage(page ?? null); setSelectedId(id) }} /> : view === 'search' ? <SearchEmpty query={query} /> : items.length ? <div className="memory-list">{items.map(item => <button className="memory-row" key={item.id} onClick={() => setSelectedId(item.id)}><span className={`memory-icon ${item.kind}`}>{['link', 'web_page'].includes(item.kind) ? <Link2 size={18} /> : <FileText size={18} />}</span><span className="memory-copy"><span className="memory-title">{item.title}</span><span className="memory-subline">{['link', 'web_page'].includes(item.kind) ? domain(item.source_url) : item.kind === 'document' ? 'Document' : item.kind === 'pdf' ? 'PDF' : item.kind === 'image' ? 'Image' : item.kind === 'snippet' ? 'Pasted text' : 'Personal note'}<span className="subline-dot">·</span>{memoryStatus(item)}</span></span><span className="memory-date">{formatDate(item.captured_at)}</span><ArrowRight size={16} className="row-arrow" /></button>)}</div> : <div className="empty-state"><div className="empty-art" aria-hidden="true"><div className="art-circle art-circle-one" /><div className="art-circle art-circle-two" /><div className="art-card art-card-back"><span /><span /></div><div className="art-card art-card-front"><BookOpen size={24} /><span /><span /></div><div className="art-sparkle"><Sparkles size={18} /></div></div><h3>{query ? 'Nothing matched that memory' : 'Your memory starts here'}</h3><p>{query ? 'Try a different phrase or change the filter.' : 'Save a useful link, note, or pasted passage. We’ll make it easy to find again.'}</p>{!query && <div className="empty-actions"><button className="primary-button" onClick={() => openNew('link')}><Link2 size={16} /> Save a link</button><button className="secondary-button" onClick={() => { setEditorError(''); setManualUrlOpen(true) }}><Link2 size={16} /> Save webpage</button><button className="secondary-button" onClick={() => openNew('note')}><FileText size={16} /> Write a note</button><button className="secondary-button" onClick={() => openNew('snippet')}><FileText size={16} /> Paste text</button><button className="secondary-button" onClick={() => pdfRef.current?.click()}><FileText size={16} /> Upload PDF</button><button className="secondary-button" onClick={() => docxRef.current?.click()}><FileText size={16} /> Upload DOCX</button><button className="secondary-button" onClick={() => imageRef.current?.click()}><FileText size={16} /> Upload image</button><button className="secondary-button" onClick={() => fileRef.current?.click()}><FileText size={16} /> Upload text</button></div>}</div>}
             {total > PAGE_SIZE && <div className="pagination"><span>{page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {total}</span><div><button disabled={page === 0} onClick={() => { setPage(page - 1); setSelectedId(null) }}>Previous</button><button disabled={(page + 1) * PAGE_SIZE >= total} onClick={() => { setPage(page + 1); setSelectedId(null) }}>Next</button></div></div>}
-          </div>
+          </div>}
           <div className="page-footnote"><Sparkles size={14} /> A place for ideas, references, and everything in between.</div>
         </main>
       </div>
 
       {selected && <div className="overlay" onMouseDown={event => { if (event.target === event.currentTarget) setSelectedId(null) }}>
         <section className="detail-panel" role="dialog" aria-modal="true" aria-label="Memory details">
-          <div className="detail-top"><button className="back-button" onClick={() => setSelectedId(null)}><ArrowLeft size={18} /> Back to library</button><button className="icon-button" aria-label="Close details" onClick={() => setSelectedId(null)}><X size={20} /></button></div>
+          <div className="detail-top"><button className="back-button" onClick={() => setSelectedId(null)}><ArrowLeft size={18} /> {view === 'search' ? 'Back to results' : 'Back to library'}</button><button className="icon-button" aria-label="Close details" onClick={() => setSelectedId(null)}><X size={20} /></button></div>
           <div className="detail-body">
             <div className={`detail-icon ${selected.kind}`}>{['link', 'web_page'].includes(selected.kind) ? <Link2 size={23} /> : <FileText size={23} />}</div>
             <div className="detail-kicker">{selected.kind === 'web_page' ? 'BROWSER CAPTURE' : selected.kind === 'link' ? 'SAVED LINK' : selected.kind === 'document' ? 'TEXT DOCUMENT' : selected.kind === 'pdf' ? 'SAVED PDF' : selected.kind === 'image' ? 'SAVED IMAGE' : selected.kind === 'snippet' ? 'PASTED TEXT' : 'PERSONAL NOTE'} <span>·</span> {formatDate(selected.captured_at)}</div>
@@ -517,9 +563,10 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
             {selected.kind === 'image' && <><div className="detail-section-title">Preview</div><img className="memory-image-preview" src={`/v1/uploads/${selected.id}/preview`} alt={selected.title} /><div className="detail-section-title">Recognized text</div><p className="detail-note">{extracted ?? (selected.status === 'pending' || selected.status === 'processing' ? 'Recognizing text...' : selected.status === 'failed' ? 'Text recognition failed. The original is still available.' : 'No text was detected in this image.')}</p><div className="detail-divider" /></>}
             {['web_page', 'snippet'].includes(selected.kind) && <><div className="detail-section-title">Your note</div><p className="detail-note">{selected.note || 'No note added yet.'}</p><div className="detail-divider" /></>}
             {selected.kind !== 'image' && <><div className="detail-section-title">{selected.kind === 'document' || selected.kind === 'pdf' ? 'Extracted text' : selected.kind === 'web_page' ? 'Captured page text' : selected.kind === 'snippet' ? 'Pasted text' : 'Your note'}</div>
-            {selected.kind === 'pdf' ? <div className="pdf-pages">{pdfPages.length ? pdfPages.map(page => <section key={page.page_number}><strong>Page {page.page_number}</strong><p className="detail-note">{page.body}</p></section>) : <p className="detail-note">{selected.status === 'partial' ? 'No text was detected on this PDF. The original is still available.' : selected.status === 'failed' ? 'PDF processing failed. The original is still available.' : 'Extracting PDF text...'}</p>}{selected.status === 'failed' && pdfPages.length > 0 && <p className="detail-note">Latest retry failed. Showing previously extracted text.</p>}{selected.status === 'partial' && pdfPages.length > 0 && <p className="detail-note">Some pages have no detectable text.</p>}</div> : <p className="detail-note">{selected.kind === 'document' ? extracted ?? (selected.status === 'failed' ? 'Text extraction failed. The original file is still available.' : selected.status === 'partial' ? 'No readable text was found in this document.' : 'Extracting text from the original file...') : selected.kind === 'web_page' ? extracted ?? (selected.status === 'pending' || selected.status === 'processing' ? 'Fetching page text...' : selected.capture_method === 'manual' ? `Only the URL was saved (${selected.capture_reason || 'text unavailable'}). You can refresh the page text later.` : `Only the URL and title were saved (${selected.capture_reason || 'text unavailable'}). Try saving the page again from the extension.`) : selected.kind === 'snippet' ? extracted ?? 'Loading pasted text...' : selected.note || 'No note added yet.'}</p>}
+            {selected.kind === 'pdf' ? <div className="pdf-pages">{pdfPages.length ? pdfPages.map(page => <section id={`pdf-page-${page.page_number}`} key={page.page_number}><strong>Page {page.page_number}</strong><p className="detail-note">{page.body}</p></section>) : <p className="detail-note">{selected.status === 'partial' ? 'No text was detected on this PDF. The original is still available.' : selected.status === 'failed' ? 'PDF processing failed. The original is still available.' : 'Extracting PDF text...'}</p>}{selected.status === 'failed' && pdfPages.length > 0 && <p className="detail-note">Latest retry failed. Showing previously extracted text.</p>}{selected.status === 'partial' && pdfPages.length > 0 && <p className="detail-note">Some pages have no detectable text.</p>}</div> : <p className="detail-note">{selected.kind === 'document' ? extracted ?? (selected.status === 'failed' ? 'Text extraction failed. The original file is still available.' : selected.status === 'partial' ? 'No readable text was found in this document.' : 'Extracting text from the original file...') : selected.kind === 'web_page' ? extracted ?? (selected.status === 'pending' || selected.status === 'processing' ? 'Fetching page text...' : selected.capture_method === 'manual' ? `Only the URL was saved (${selected.capture_reason || 'text unavailable'}). You can refresh the page text later.` : `Only the URL and title were saved (${selected.capture_reason || 'text unavailable'}). Try saving the page again from the extension.`) : selected.kind === 'snippet' ? extracted ?? 'Loading pasted text...' : selected.note || 'No note added yet.'}</p>}
             <div className="detail-divider" /></>}
             <div className="detail-section-title">Details</div><div className="detail-meta"><span>Type</span><strong>{selected.kind === 'web_page' ? 'Web page' : selected.kind === 'link' ? 'Link' : selected.kind === 'document' ? 'Document' : selected.kind === 'pdf' ? 'PDF' : selected.kind === 'image' ? 'Image' : selected.kind === 'snippet' ? 'Pasted text' : 'Note'}</strong><span>Saved</span><strong>{formatDate(selected.captured_at)}</strong><span>Updated</span><strong>{formatDate(selected.updated_at)}</strong><span>Status</span><strong>{selected.status}</strong>{selected.capture_reason && <><span>Processing</span><strong>{selected.capture_reason.replaceAll('_', ' ')}</strong></>}{selected.source_author && <><span>Author</span><strong>{selected.source_author}</strong></>}{selected.published_at && <><span>Published</span><strong>{formatDate(selected.published_at)}</strong></>}{selected.source_image_uri && <><span>Page image</span><a href={selected.source_image_uri} target="_blank" rel="noopener noreferrer">View at source</a></>}{selected.kind === 'web_page' && selected.capture_method === 'manual' && <><span>Saved copy</span><strong>{extracted ? 'Extracted text only' : selected.status === 'ready' ? 'Extracted text only' : 'URL only'}</strong></>}{selected.original_asset && <><span>File</span><strong>{selected.original_asset.source_filename}</strong><span>Format</span><strong>{selected.original_asset.mime_type}</strong><span>Size</span><strong>{(selected.original_asset.byte_size / 1024).toFixed(1)} KiB</strong></>}{selected.project_name && <><span>Project</span><strong>{selected.project_name}</strong></>}</div>
+            {selected.organization ? <OrganizationPicker memoryId={selected.id} selected={selected.organization} data={organization} onChanged={value => { setDirectMemory(previous => previous?.id === selected.id ? { ...previous, organization: value } : previous); void refreshOrganization() }} /> : <p className="organization-picker-empty">Loading organization...</p>}
             <div className="detail-actions">{['note', 'link', 'snippet'].includes(selected.kind) && <button className="secondary-button" onClick={() => void openEdit(selected)}>Edit memory</button>}<button className="delete-button" onClick={() => void remove(selected)}><Trash2 size={16} /> Delete</button></div>
           </div>
         </section>

@@ -56,6 +56,20 @@ def export_account(background_tasks: BackgroundTasks, session: dict = Depends(cu
             "SELECT memory_id, project_id FROM memory_projects WHERE account_id = %s ORDER BY memory_id, project_id",
             (account_id,),
         ).fetchall()
+        collections = db.execute(
+            "SELECT id, name, created_at FROM collections WHERE account_id = %s ORDER BY id", (account_id,),
+        ).fetchall()
+        collection_assignments = db.execute(
+            "SELECT memory_id, collection_id FROM collection_memories WHERE account_id = %s ORDER BY memory_id, collection_id",
+            (account_id,),
+        ).fetchall()
+        tags = db.execute(
+            "SELECT id, name, created_at FROM tags WHERE account_id = %s ORDER BY id", (account_id,),
+        ).fetchall()
+        tag_assignments = db.execute(
+            "SELECT memory_id, tag_id FROM memory_tags WHERE account_id = %s ORDER BY memory_id, tag_id",
+            (account_id,),
+        ).fetchall()
 
     EXPORT_ROOT.mkdir(parents=True, exist_ok=True)
     output = EXPORT_ROOT / f"{uuid.uuid4()}.zip"
@@ -67,6 +81,10 @@ def export_account(background_tasks: BackgroundTasks, session: dict = Depends(cu
             write_jsonl(archive, "passages.jsonl", passages)
             write_jsonl(archive, "projects.jsonl", projects)
             write_jsonl(archive, "memory_projects.jsonl", assignments)
+            write_jsonl(archive, "collections.jsonl", collections)
+            write_jsonl(archive, "collection_memories.jsonl", collection_assignments)
+            write_jsonl(archive, "tags.jsonl", tags)
+            write_jsonl(archive, "memory_tags.jsonl", tag_assignments)
             for asset in assets:
                 source = path_for(asset["object_key"])
                 archive_path = f"originals/{asset['id']}"
@@ -79,12 +97,14 @@ def export_account(background_tasks: BackgroundTasks, session: dict = Depends(cu
                 } | {"path": archive_path})
             write_jsonl(archive, "assets.jsonl", exported_assets)
             archive.writestr("manifest.json", json.dumps({
-                "format": "contextos-account-export", "version": 1,
+                "format": "contextos-account-export", "version": 2,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "memory_count": len(memories), "content_count": len(contents),
                 "passage_count": len(passages),
                 "asset_count": len(exported_assets),
                 "project_count": len(projects), "assignment_count": len(assignments),
+                "collection_count": len(collections), "collection_assignment_count": len(collection_assignments),
+                "tag_count": len(tags), "tag_assignment_count": len(tag_assignments),
             }, indent=2).encode("utf-8"))
     except BaseException:
         output.unlink(missing_ok=True)
