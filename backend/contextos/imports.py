@@ -18,6 +18,8 @@ from .memories import clean_title, source_domain
 from .captures import assign_project
 from .storage import delete, object_key, path_for
 from .uploads import valid_image
+from .extract_docx import MIME as DOCX_MIME, extract as extract_docx
+from .extract_text import PermanentExtractionError
 
 router = APIRouter(prefix="/v1", tags=["import"])
 MAX_IMPORT_BYTES = 60 * 1024 * 1024
@@ -105,6 +107,7 @@ def parse_export(raw: bytes):
                     raise ValueError("Invalid original path")
                 info = archive.getinfo(path)
                 limit = (50 * 1024 * 1024 if asset.get("mime_type") == "application/pdf" else
+                         25 * 1024 * 1024 if asset.get("mime_type") == DOCX_MIME else
                          20 * 1024 * 1024 if asset.get("role") == "screenshot" or asset.get("mime_type", "").startswith("image/") else
                          10 * 1024 * 1024)
                 if info.file_size > limit:
@@ -146,6 +149,15 @@ def import_record(account_id, row, contents, passages, assets, originals, projec
     if kind == "pdf" and (assets[0]["mime_type"] != "application/pdf" or
                            not originals[assets[0]["id"]].startswith(b"%PDF-")):
         raise ValueError("Invalid PDF original")
+    if kind == "document":
+        mime_type = assets[0]["mime_type"]
+        if mime_type not in {"text/plain", "text/markdown", DOCX_MIME}:
+            raise ValueError("Unsupported document original")
+        if mime_type == DOCX_MIME:
+            try:
+                extract_docx(originals[assets[0]["id"]])
+            except PermanentExtractionError as exc:
+                raise ValueError(f"Invalid DOCX original ({exc.code})") from exc
     if kind == "image":
         mime_type = assets[0]["mime_type"]
         if mime_type not in {"image/png", "image/jpeg", "image/webp"} or not valid_image(originals[assets[0]["id"]], mime_type):
@@ -196,7 +208,7 @@ def import_record(account_id, row, contents, passages, assets, originals, projec
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (memory_id, account_id, kind, title, uri, domain, timestamp(row.get("captured_at")),
                  timestamp(row["published_at"]) if row.get("published_at") else None,
-                 row.get("status") if kind in {"web_page", "pdf"} and row.get("status") in {"ready", "partial"} else "partial" if kind == "image" else "pending" if kind == "pdf" else "ready",
+                 row.get("status") if kind in {"web_page", "pdf", "document"} and row.get("status") in {"ready", "partial"} and (kind == "web_page" or any(c.get("provenance") == "extracted" and c.get("is_active") for c in contents)) else "partial" if kind == "image" else "pending" if kind in {"pdf", "document"} else "ready",
                  note, row.get("capture_reason") if kind in {"web_page", "pdf"} else None,
                  timestamp(row.get("created_at")), timestamp(row.get("updated_at"))))
             for asset in assets:
@@ -238,6 +250,10 @@ def import_record(account_id, row, contents, passages, assets, originals, projec
             if kind == "pdf" and not any(c.get("provenance") == "extracted" and c.get("is_active") for c in contents):
                 db.execute("""INSERT INTO extraction_jobs (id, account_id, memory_id, job_type)
                     VALUES (%s, %s, %s, 'extract_pdf')""", (uuid.uuid4(), account_id, memory_id))
+            if kind == "document" and not any(c.get("provenance") == "extracted" and c.get("is_active") for c in contents):
+                job_type = "extract_docx" if assets[0]["mime_type"] == DOCX_MIME else "extract_text"
+                db.execute("""INSERT INTO extraction_jobs (id, account_id, memory_id, job_type)
+                    VALUES (%s, %s, %s, %s)""", (uuid.uuid4(), account_id, memory_id, job_type))
             if project_name:
                 assign_project(db, account_id, memory_id, project_name)
     except BaseException:

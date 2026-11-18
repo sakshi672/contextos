@@ -11,6 +11,8 @@ from fastapi.responses import FileResponse
 
 from .auth import current_session, write_session
 from .database import connection
+from .extract_docx import MIME as DOCX_MIME, extract as extract_docx
+from .extract_text import PermanentExtractionError
 from .storage import delete, object_key, path_for
 
 router = APIRouter(prefix="/v1/uploads", tags=["uploads"])
@@ -19,6 +21,7 @@ ALLOWED = {".txt": "text/plain", ".md": "text/markdown"}
 IMAGE_ALLOWED = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_PDF_BYTES = 50 * 1024 * 1024
+MAX_DOCX_BYTES = 25 * 1024 * 1024
 
 
 def valid_image(data: bytes, mime_type: str) -> bool:
@@ -186,6 +189,54 @@ async def upload_text(
                 "VALUES (%s, %s, %s, 'extract_text')",
                 (job_id, account_id, memory_id),
             )
+    except BaseException:
+        delete(key)
+        raise
+    return {"data": row, "error": None}
+
+
+@router.post("/docx", status_code=201)
+async def upload_docx(request: Request, filename: str = Query(min_length=1, max_length=255),
+                      session: dict = Depends(write_session),
+                      content_length: int | None = Header(default=None, ge=0)) -> dict:
+    name = Path(filename).name
+    if name != filename or Path(name).suffix.lower() != ".docx":
+        raise HTTPException(415, detail="Choose a DOCX file")
+    title = Path(name).stem.strip()[:240]
+    if not title:
+        raise HTTPException(422, detail="DOCX needs a name")
+    if content_length is not None and content_length > MAX_DOCX_BYTES:
+        raise HTTPException(413, detail="DOCX exceeds 25 MiB")
+    chunks, size = [], 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_DOCX_BYTES:
+            raise HTTPException(413, detail="DOCX exceeds 25 MiB")
+        chunks.append(chunk)
+    data = b"".join(chunks)
+    try:
+        extract_docx(data)
+    except PermanentExtractionError as exc:
+        raise HTTPException(422, detail=f"Invalid or unsupported DOCX ({exc.code})") from exc
+    account_id = session["account_id"]
+    memory_id, asset_id, job_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    key = object_key(account_id, memory_id, asset_id)
+    target = path_for(key)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        target.write_bytes(data)
+        with connection() as db:
+            row = db.execute("""INSERT INTO memories (id, account_id, kind, title, captured_at, status)
+                VALUES (%s, %s, 'document', %s, %s, 'pending')
+                RETURNING id, kind, title, captured_at, status, created_at""",
+                (memory_id, account_id, title, datetime.now(timezone.utc))).fetchone()
+            db.execute("""INSERT INTO memory_assets (id, account_id, memory_id, role, object_key,
+                mime_type, byte_size, sha256, source_filename)
+                VALUES (%s, %s, %s, 'original', %s, %s, %s, %s, %s)""",
+                (asset_id, account_id, memory_id, key, DOCX_MIME, size,
+                 hashlib.sha256(data).hexdigest(), name))
+            db.execute("""INSERT INTO extraction_jobs (id, account_id, memory_id, job_type)
+                VALUES (%s, %s, %s, 'extract_docx')""", (job_id, account_id, memory_id))
     except BaseException:
         delete(key)
         raise
