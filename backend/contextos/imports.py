@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from .auth import write_session
 from .database import connection
 from .memories import clean_title, source_domain
-from .captures import assign_project
+from .organization import TABLES, cleaned_name
 from .storage import delete, object_key, path_for
 from .uploads import valid_image
 from .extract_docx import MIME as DOCX_MIME, extract as extract_docx
@@ -64,7 +64,7 @@ def parse_export(raw: bytes):
     try:
         with ZipFile(BytesIO(raw)) as archive:
             infos = archive.infolist()
-            if len(infos) > MAX_RECORDS * 2 + 7 or sum(info.file_size for info in infos) > MAX_EXPANDED_BYTES:
+            if len(infos) > MAX_RECORDS * 4 + 11 or sum(info.file_size for info in infos) > MAX_EXPANDED_BYTES:
                 raise ValueError("Export exceeds import limits")
             names = [info.filename for info in infos]
             if len(names) != len(set(names)) or any(
@@ -72,34 +72,52 @@ def parse_export(raw: bytes):
             ):
                 raise ValueError("Unsafe export paths")
             manifest = json.loads(archive.read("manifest.json"))
-            if manifest.get("format") != "contextos-account-export" or manifest.get("version") != 1:
+            if manifest.get("format") != "contextos-account-export" or manifest.get("version") not in {1, 2}:
                 raise ValueError("Unsupported export version")
             memories = read_jsonl(archive, "memories.jsonl")
             contents = read_jsonl(archive, "contents.jsonl")
             passages = read_jsonl(archive, "passages.jsonl") if "passages.jsonl" in names else []
             assets = read_jsonl(archive, "assets.jsonl")
-            projects = read_jsonl(archive, "projects.jsonl") if "projects.jsonl" in names else []
-            assignments = read_jsonl(archive, "memory_projects.jsonl") if "memory_projects.jsonl" in names else []
+            organization = {}
+            for entity, (_, join_table, foreign_key, maximum) in TABLES.items():
+                definitions = read_jsonl(archive, f"{entity}.jsonl") if f"{entity}.jsonl" in names else []
+                assignment_file = {"projects": "memory_projects.jsonl", "collections": "collection_memories.jsonl", "tags": "memory_tags.jsonl"}[entity]
+                assignments = read_jsonl(archive, assignment_file) if assignment_file in names else []
+                if len(definitions) > MAX_RECORDS or len(assignments) > MAX_RECORDS * 10:
+                    raise ValueError(f"Too many {entity} records")
+                ids = {}
+                normalized_names = set()
+                for definition in definitions:
+                    identifier = str(uuid.UUID(definition["id"]))
+                    name = cleaned_name(definition["name"], maximum)
+                    if identifier in ids or name.casefold() in normalized_names:
+                        raise ValueError(f"Duplicate {entity} definition")
+                    ids[identifier] = name
+                    normalized_names.add(name.casefold())
+                per_memory = {}
+                seen_assignments = set()
+                for assignment in assignments:
+                    memory_id = str(uuid.UUID(assignment["memory_id"]))
+                    entity_id = str(uuid.UUID(assignment[foreign_key]))
+                    if entity_id not in ids or (memory_id, entity_id) in seen_assignments:
+                        raise ValueError(f"Invalid {entity} assignment")
+                    seen_assignments.add((memory_id, entity_id))
+                    per_memory.setdefault(memory_id, []).append(ids[entity_id])
+                organization[entity] = {"names": list(ids.values()), "assignments": per_memory}
+                count_key, assignment_key = {"projects": ("project_count", "assignment_count"),
+                                             "collections": ("collection_count", "collection_assignment_count"),
+                                             "tags": ("tag_count", "tag_assignment_count")}[entity]
+                if (count_key in manifest and manifest[count_key] != len(definitions)) or (
+                    assignment_key in manifest and manifest[assignment_key] != len(assignments)):
+                    raise ValueError(f"{entity} counts do not match")
             if (len(memories) > MAX_RECORDS or len(contents) > MAX_RECORDS * 5 or
                 len(assets) > MAX_RECORDS or len(passages) > MAX_RECORDS * 200 or
-                len(projects) > MAX_RECORDS or len(assignments) > MAX_RECORDS or
                 any(manifest.get(key) != count for key, count in (
                     ("memory_count", len(memories)), ("content_count", len(contents)),
                     ("asset_count", len(assets))))):
                 raise ValueError("Export counts do not match")
-            if ("project_count" in manifest and manifest["project_count"] != len(projects)) or (
-                "assignment_count" in manifest and manifest["assignment_count"] != len(assignments)):
-                raise ValueError("Project counts do not match")
             if "passage_count" in manifest and manifest["passage_count"] != len(passages):
                 raise ValueError("Passage counts do not match")
-            project_names = {row["id"]: row["name"] for row in projects}
-            if len(project_names) != len(projects):
-                raise ValueError("Duplicate project ID")
-            project_for_memory = {}
-            for assignment in assignments:
-                project_for_memory.setdefault(assignment["memory_id"], []).append(project_names[assignment["project_id"]])
-            if any(len(names) > 1 for names in project_for_memory.values()):
-                raise ValueError("Multiple projects per memory are not supported yet")
             originals = {}
             for asset in assets:
                 path = asset["path"]
@@ -116,7 +134,7 @@ def parse_export(raw: bytes):
                 if len(body) != asset["byte_size"] or hashlib.sha256(body).hexdigest() != asset["sha256"]:
                     raise ValueError("Original checksum mismatch")
                 originals[asset["id"]] = body
-            return memories, contents, passages, assets, originals, project_for_memory
+            return memories, contents, passages, assets, originals, organization
     except (BadZipFile, KeyError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
         raise HTTPException(422, detail=f"Invalid Context OS export: {exc}") from exc
 
@@ -130,7 +148,21 @@ def timestamp(value, default=None):
     return parsed
 
 
-def import_record(account_id, row, contents, passages, assets, originals, project_name=None):
+def add_organization(db, account_id, memory_id, entity: str, names: list[str]) -> None:
+    table, join_table, foreign_key, _ = TABLES[entity]
+    for name in names:
+        db.execute(f"INSERT INTO {table} (id, account_id, name) VALUES (%s, %s, %s) "
+                   "ON CONFLICT (account_id, lower(name)) DO NOTHING",
+                   (uuid.uuid4(), account_id, name))
+        item = db.execute(f"SELECT id FROM {table} WHERE account_id = %s AND lower(name) = lower(%s)",
+                          (account_id, name)).fetchone()
+        if memory_id is not None:
+            db.execute(f"INSERT INTO {join_table} (account_id, memory_id, {foreign_key}) "
+                       "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING", (account_id, memory_id, item["id"]))
+
+
+def import_record(account_id, row, contents, passages, assets, originals, organization=None):
+    organization = organization or {"projects": [], "collections": [], "tags": []}
     kind = row["kind"]
     if kind not in {"note", "link", "document", "web_page", "snippet", "image", "pdf"}:
         raise ValueError("Unsupported memory type")
@@ -206,8 +238,8 @@ def import_record(account_id, row, contents, passages, assets, originals, projec
                     AND m.user_note = %s AND c.content_sha256 IS NOT DISTINCT FROM %s LIMIT 1""",
                     (account_id, uri, note, source_content)).fetchone()
             if duplicate:
-                if project_name:
-                    assign_project(db, account_id, duplicate["id"], project_name)
+                for entity, names in organization.items():
+                    add_organization(db, account_id, duplicate["id"], entity, names)
                 return "duplicate", str(duplicate["id"])
             has_extracted = any(c.get("provenance") == "extracted" and c.get("is_active") for c in contents)
             status = (row.get("status", "partial") if kind == "web_page" else
@@ -276,8 +308,8 @@ def import_record(account_id, row, contents, passages, assets, originals, projec
             if kind == "web_page" and row.get("capture_method") == "manual" and status == "pending":
                 db.execute("""INSERT INTO extraction_jobs (id, account_id, memory_id, job_type)
                     VALUES (%s, %s, %s, 'fetch_url')""", (uuid.uuid4(), account_id, memory_id))
-            if project_name:
-                assign_project(db, account_id, memory_id, project_name)
+            for entity, names in organization.items():
+                add_organization(db, account_id, memory_id, entity, names)
     except BaseException:
         for key in keys:
             delete(key)
@@ -299,7 +331,7 @@ async def import_data(request: Request, format: str = Query(pattern="^(contextos
     if not raw:
         raise HTTPException(422, detail="Import is empty")
     if format == "contextos":
-        memories, contents, passages, assets, originals, project_for_memory = parse_export(raw)
+        memories, contents, passages, assets, originals, organization = parse_export(raw)
     else:
         try:
             parser = BookmarkParser()
@@ -316,7 +348,8 @@ async def import_data(request: Request, format: str = Query(pattern="^(contextos
                 captured = None
             memories.append({"id": str(uuid.uuid4()), "kind": "link", "title": item["title"].strip() or item["source_uri"],
                              "source_uri": item["source_uri"], "captured_at": captured})
-        contents, passages, assets, originals, project_for_memory = [], [], [], {}, {}
+        contents, passages, assets, originals = [], [], [], {}
+        organization = {entity: {"names": [], "assignments": {}} for entity in TABLES}
     content_by_memory = {}
     passage_by_memory = {}
     asset_by_memory = {}
@@ -329,15 +362,19 @@ async def import_data(request: Request, format: str = Query(pattern="^(contextos
     memory_ids = {row.get("id") for row in memories}
     if format == "contextos" and (set(content_by_memory) | set(passage_by_memory) | set(asset_by_memory)) - memory_ids:
         raise HTTPException(422, detail="Export has unowned content or assets")
-    if set(project_for_memory) - memory_ids:
-        raise HTTPException(422, detail="Export has unowned project assignments")
+    for entity, group in organization.items():
+        if set(group["assignments"]) - memory_ids:
+            raise HTTPException(422, detail=f"Export has unowned {entity} assignments")
+    with connection() as db:
+        for entity, group in organization.items():
+            add_organization(db, session["account_id"], None, entity, group["names"])
     report = {"imported": 0, "duplicates": 0, "failed": 0, "items": []}
     for index, row in enumerate(memories):
         try:
             state, target_id = import_record(session["account_id"], row,
                 content_by_memory.get(row["id"], []), passage_by_memory.get(row["id"], []),
                 asset_by_memory.get(row["id"], []), originals,
-                project_for_memory.get(row["id"], [None])[0])
+                {entity: group["assignments"].get(row["id"], []) for entity, group in organization.items()})
         except (ValueError, KeyError, TypeError, HTTPException, UnicodeError) as exc:
             state, target_id = "failed", None
             error = exc.detail if isinstance(exc, HTTPException) else str(exc)

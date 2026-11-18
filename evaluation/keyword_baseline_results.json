@@ -1,0 +1,63 @@
+{
+  "corpus": "seed_cases.json",
+  "engine": "PostgreSQL keyword search",
+  "sample_size": 6,
+  "top_1": 5,
+  "cases": [
+    {
+      "query": "background jobs",
+      "clue_type": "exact",
+      "expected_id": "m01",
+      "rank": 1,
+      "time_to_find_ms": 97.35,
+      "query_ms": 97.35,
+      "result_count": 1
+    },
+    {
+      "query": "visual memory chart",
+      "clue_type": "partial",
+      "expected_id": "m02",
+      "rank": 1,
+      "time_to_find_ms": 64.51,
+      "query_ms": 64.51,
+      "result_count": 1
+    },
+    {
+      "query": "article about retries from last month",
+      "clue_type": "meaning_and_date",
+      "expected_id": "m01",
+      "rank": 2,
+      "time_to_find_ms": 72.26,
+      "query_ms": 72.26,
+      "result_count": 2
+    },
+    {
+      "query": "the blue pricing picture",
+      "clue_type": "visual_note",
+      "expected_id": "m05",
+      "rank": 1,
+      "time_to_find_ms": 73.99,
+      "query_ms": 73.99,
+      "result_count": 1
+    },
+    {
+      "query": "permissions for saving the current tab",
+      "clue_type": "meaning",
+      "expected_id": "m06",
+      "rank": 1,
+      "time_to_find_ms": 69.84,
+      "query_ms": 69.84,
+      "result_count": 1
+    },
+    {
+      "query": "ranking snippets filters",
+      "clue_type": "note",
+      "expected_id": "m04",
+      "rank": 1,
+      "time_to_find_ms": 61.58,
+      "query_ms": 61.58,
+      "result_count": 1
+    }
+  ],
+  "note": "Synthetic metadata-only baseline. Time to find is automated query-to-identification in API results, including a local database connection; it is not human UI task-completion time."
+}

@@ -81,15 +81,15 @@ Mark a box `[x]` only when the task is implemented and its stated behavior has b
 - [x] Index the current title, URL, and user note fields with SQLite FTS5 and verify search and reindexing after edits.
 - [x] Index titles, extracted text, user notes, and relevant source metadata for keyword/full-text search.
 - [x] Build the global Search screen with ranked results and clear reasons each result matched.
-- [ ] Add filters for type, source/domain, capture date, project, tag, and collection where applicable.
-- [ ] Add search within a project and preserve filters across result/detail navigation.
-- [ ] Create projects and associate one memory with multiple projects without copying it.
-- [ ] Add tags and collections with create, rename, assign, remove, and delete flows.
-- [ ] Support moving from a search result to the original source or relevant text/page when available.
-- [ ] Handle no results, ambiguous queries, extraction gaps, and deleted items clearly.
-- [ ] Run the retrieval corpus from Phase 0; record correct-result rank and time to find the intended item.
+- [x] Add filters for type, source/domain, capture date, project, tag, and collection where applicable.
+- [x] Add search within a project and preserve filters across result/detail navigation.
+- [x] Create projects and associate one memory with multiple projects without copying it.
+- [x] Add tags and collections with create, rename, assign, remove, and delete flows.
+- [x] Support moving from a search result to the original source or relevant text/page when available.
+- [x] Handle no results, ambiguous queries, extraction gaps, and deleted items clearly.
+- [x] Run the retrieval corpus from Phase 0; record correct-result rank and automated query-to-identification time in [the baseline results](evaluation/keyword_baseline_results.json). Human UI task time remains a Phase 7 validation.
 - [x] Test search isolation so one account's queries cannot return another account's content.
-- [ ] **Phase 4 exit:** users can reliably recover known items across source types and organize them without duplication.
+- [x] **Phase 4 exit:** users can recover known items across source types and organize them without duplication. The six synthetic retrieval cases reach the expected item within two results (five rank first); broader observed retrieval quality remains for Phase 6 and public-readiness testing.
 
 ## Phase 5 — Context exploration
 

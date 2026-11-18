@@ -2,6 +2,7 @@
 
 import http.cookiejar
 import base64
+import hashlib
 from io import BytesIO
 import json
 import os
@@ -156,11 +157,73 @@ class PostgresApiTest(unittest.TestCase):
                        (title, project_id, account_id))
         self.assertEqual(self.call(first, f"/v1/search?q=telescope&project_id={project_id}")[1]["data"]["items"][0]["id"], title)
         self.assertEqual(self.call(second, f"/v1/search?q=telescope&project_id={project_id}")[1]["data"]["total"], 0)
+        self.assertEqual(self.call(first, f"/v1/search?project_id={project_id}")[1]["data"]["items"][0]["id"], title)
+        status, partial = self.call(first, "/v1/search?q=telescope%20unrelated")
+        self.assertEqual(status, 200, partial)
+        self.assertEqual(partial["data"]["match_mode"], "some_words")
+        self.assertEqual(partial["data"]["items"][0]["id"], title)
 
         self.call(first, f"/v1/memories/{title}", "PATCH", {"title": "Meteor planning"}, csrf)
         self.assertEqual(self.call(first, "/v1/search?q=telescope")[1]["data"]["total"], 1)
         self.call(first, f"/v1/memories/{content}", "DELETE", csrf=csrf)
         self.assertEqual(self.call(first, "/v1/search?q=telescope")[1]["data"]["total"], 0)
+
+    def test_organization_crud_multi_assignment_and_search_filters(self):
+        first, csrf = self.register()
+        second, other_csrf = self.register()
+        memory_id = self.call(first, "/v1/memories", "POST", {
+            "kind": "note", "title": "Aurora observations", "user_note": "Northern lights",
+        }, csrf)[1]["data"]["id"]
+
+        def create(entity, name):
+            status, result = self.call(first, f"/v1/organization/{entity}", "POST", {"name": name}, csrf)
+            self.assertEqual(status, 201, result)
+            return result["data"]["id"]
+
+        project_a = create("projects", "Sky study")
+        project_b = create("projects", "Travel")
+        tag_id = create("tags", "Astronomy")
+        collection_id = create("collections", "Ideas")
+        self.assertEqual(self.call(first, "/v1/organization/tags", "POST", {"name": "astronomy"}, csrf)[0], 409)
+        self.assertEqual(self.call(second, f"/v1/organization/projects/{project_a}", "PATCH", {"name": "Stolen"}, other_csrf)[0], 404)
+        self.assertEqual(self.call(second, "/v1/organization")[1]["data"]["projects"], [])
+        payload = {"project_ids": [project_a, project_b], "tag_ids": [tag_id],
+                   "collection_ids": [collection_id]}
+        status, result = self.call(first, f"/v1/organization/memories/{memory_id}", "PUT", payload, csrf)
+        self.assertEqual(status, 200, result)
+        self.assertEqual(len(result["data"]["projects"]), 2)
+        self.assertEqual(self.call(second, f"/v1/organization/memories/{memory_id}", "PUT", payload, other_csrf)[0], 404)
+        self.assertEqual(len(self.call(first, f"/v1/memories/{memory_id}")[1]["data"]["organization"]["projects"]), 2)
+        for key, value in (("project_id", project_a), ("project_id", project_b),
+                           ("tag_id", tag_id), ("collection_id", collection_id)):
+            self.assertEqual(self.call(first, f"/v1/search?q=aurora&{key}={value}")[1]["data"]["total"], 1)
+            self.assertEqual(self.call(second, f"/v1/search?q=aurora&{key}={value}")[1]["data"]["total"], 0)
+        self.assertEqual(self.call(first, f"/v1/organization/projects/{project_a}", "PATCH", {"name": "Night sky"}, csrf)[1]["data"]["name"], "Night sky")
+        self.assertEqual(self.call(first, f"/v1/organization/tags/{tag_id}", "DELETE", csrf=csrf)[0], 200)
+        self.assertEqual(self.call(first, f"/v1/memories/{memory_id}")[1]["data"]["organization"]["tags"], [])
+        self.assertEqual(self.call(first, f"/v1/organization/collections/{collection_id}", "DELETE", csrf=csrf)[0], 200)
+
+    def test_search_returns_matching_pdf_page_and_ignores_inactive_content(self):
+        user, _ = self.register()
+        account_id = self.started_accounts[-1]
+        memory_id, content_id = uuid.uuid4(), uuid.uuid4()
+        body = "A nebula appears near the horizon."
+        with connection() as db:
+            db.execute("""INSERT INTO memories (id, account_id, kind, title, captured_at, status)
+                VALUES (%s, %s, 'pdf', 'Field notebook', now(), 'ready')""", (memory_id, account_id))
+            db.execute("""INSERT INTO memory_contents (id, account_id, memory_id, version, provenance,
+                body, content_sha256, status, is_active) VALUES (%s, %s, %s, 1, 'extracted', %s, %s, 'ready', true)""",
+                (content_id, account_id, memory_id, body, hashlib.sha256(body.encode()).hexdigest()))
+            db.execute("""INSERT INTO content_passages (id, account_id, memory_id, content_id, ordinal,
+                body, page_number) VALUES (%s, %s, %s, %s, 0, %s, 7)""",
+                (uuid.uuid4(), account_id, memory_id, content_id, body))
+        status, result = self.call(user, "/v1/search?q=nebula")
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["data"]["items"][0]["page_number"], 7)
+        self.assertIn("content", result["data"]["items"][0]["match_reasons"])
+        with connection() as db:
+            db.execute("UPDATE memory_contents SET is_active = false WHERE id = %s", (content_id,))
+        self.assertEqual(self.call(user, "/v1/search?q=nebula")[1]["data"]["total"], 0)
 
     def test_owned_memory_flow_and_csrf(self):
         first, first_csrf = self.register()
@@ -457,6 +520,38 @@ class PostgresApiTest(unittest.TestCase):
         self.assertEqual((report["imported"], report["duplicates"], report["failed"]), (1, 1, 1), report)
         self.assertEqual(self.call(user, "/v1/memories")[1]["data"]["total"], 1)
 
+    def test_export_import_round_trip_preserves_multi_organization(self):
+        source, csrf = self.register()
+        target, target_csrf = self.register()
+        memory_id = self.call(source, "/v1/memories", "POST", {
+            "kind": "note", "title": "Constellation map", "user_note": "Orion and Lyra",
+        }, csrf)[1]["data"]["id"]
+        def create(entity, name):
+            return self.call(source, f"/v1/organization/{entity}", "POST", {"name": name}, csrf)[1]["data"]["id"]
+        first_project = create("projects", "Research")
+        second_project = create("projects", "Travel")
+        tag = create("tags", "Sky")
+        collection = create("collections", "Favorites")
+        create("collections", "Empty collection")
+        payload = {"project_ids": [first_project, second_project], "tag_ids": [tag],
+                   "collection_ids": [collection]}
+        self.assertEqual(self.call(source, f"/v1/organization/memories/{memory_id}", "PUT", payload, csrf)[0], 200)
+        with source.open(self.base + "/v1/export", timeout=5) as response:
+            archive = response.read()
+        with ZipFile(BytesIO(archive)) as bundle:
+            self.assertEqual(json.loads(bundle.read("manifest.json"))["version"], 2)
+        request = Request(self.base + "/v1/import?format=contextos", data=archive, method="POST",
+                          headers={"X-CSRF-Token": target_csrf, "Content-Type": "application/zip"})
+        with target.open(request, timeout=5) as response:
+            report = json.load(response)["data"]
+        self.assertEqual((report["imported"], report["failed"]), (1, 0), report)
+        imported_id = report["items"][0]["memory_id"]
+        assigned = self.call(target, f"/v1/memories/{imported_id}")[1]["data"]["organization"]
+        self.assertEqual({item["name"] for item in assigned["projects"]}, {"Research", "Travel"})
+        self.assertEqual([item["name"] for item in assigned["tags"]], ["Sky"])
+        self.assertEqual([item["name"] for item in assigned["collections"]], ["Favorites"])
+        self.assertEqual(len(self.call(target, "/v1/organization")[1]["data"]["collections"]), 2)
+
     def test_import_rejects_bad_archives_without_creating_records(self):
         user, csrf = self.register()
         for payload in (b"not a zip", self._archive_with_unsafe_path()):
@@ -548,7 +643,8 @@ class PostgresApiTest(unittest.TestCase):
         self.assertEqual((imported["imported"], imported["failed"]), (1, 0), imported)
         imported_id = imported["items"][0]["memory_id"]
         self.assertNotEqual(imported_id, memory_id)
-        self.assertEqual(self.call(second, f"/v1/memories/{imported_id}")[1]["data"]["project_name"], "Work")
+        projects = self.call(second, f"/v1/memories/{imported_id}")[1]["data"]["organization"]["projects"]
+        self.assertEqual({item["name"] for item in projects}, {"Research", "Work"})
         self.assertEqual(self.call(second, f"/v1/memories/{imported_id}/content")[1]["data"]["body"], "Visible story text")
         with second.open(self.base + f"/v1/uploads/{imported_id}/screenshot", timeout=5) as response:
             self.assertEqual(response.read(), png)
