@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from .auth import current_session, write_session
 from .database import connection
 from .object_cleanup import cleanup_one
+from .extract_docx import MIME as DOCX_MIME
 
 router = APIRouter(prefix="/v1/memories", tags=["memories"])
 FIELDS = "id, kind, title, source_uri, source_domain, captured_at, status, user_note, capture_reason, created_at, updated_at"
@@ -181,6 +182,41 @@ def get_passages(memory_id: uuid.UUID, session: dict = Depends(current_session))
             WHERE p.memory_id = %s AND p.account_id = %s AND c.provenance = 'extracted'
             AND c.is_active ORDER BY p.ordinal""", (memory_id, session["account_id"])).fetchall()
     return {"data": {"items": rows}, "error": None}
+
+
+@router.post("/{memory_id}/reprocess", status_code=202)
+def reprocess_memory(memory_id: uuid.UUID, session: dict = Depends(write_session)) -> dict:
+    """Queue a fresh extraction from the immutable owned original."""
+    account_id = session["account_id"]
+    with connection() as db:
+        memory = db.execute("""SELECT kind FROM memories WHERE id = %s AND account_id = %s
+            FOR UPDATE""", (memory_id, account_id)).fetchone()
+        if memory is None:
+            raise HTTPException(404, detail="Memory not found")
+        if memory["kind"] not in {"document", "pdf"}:
+            raise HTTPException(422, detail="This memory has no reprocessable file")
+        asset = db.execute("""SELECT mime_type FROM memory_assets WHERE memory_id = %s
+            AND account_id = %s AND role = 'original' AND storage_state = 'stored' LIMIT 1""",
+            (memory_id, account_id)).fetchone()
+        if asset is None:
+            raise HTTPException(409, detail="Original file is unavailable")
+        mime = asset["mime_type"]
+        job_type = ("extract_pdf" if memory["kind"] == "pdf" and mime == "application/pdf" else
+                    "extract_docx" if memory["kind"] == "document" and mime == DOCX_MIME else
+                    "extract_text" if memory["kind"] == "document" and mime in {"text/plain", "text/markdown"} else None)
+        if job_type is None:
+            raise HTTPException(422, detail="Unsupported original format")
+        active = db.execute("""SELECT id FROM extraction_jobs WHERE memory_id = %s
+            AND account_id = %s AND status IN ('pending', 'processing') LIMIT 1""",
+            (memory_id, account_id)).fetchone()
+        if active:
+            return {"data": {"job_id": active["id"], "status": "pending"}, "error": None}
+        job_id = uuid.uuid4()
+        db.execute("""INSERT INTO extraction_jobs (id, account_id, memory_id, job_type)
+            VALUES (%s, %s, %s, %s)""", (job_id, account_id, memory_id, job_type))
+        db.execute("""UPDATE memories SET status = 'pending', capture_reason = NULL,
+            updated_at = now() WHERE id = %s AND account_id = %s""", (memory_id, account_id))
+    return {"data": {"job_id": job_id, "status": "pending"}, "error": None}
 
 
 @router.patch("/{memory_id}")

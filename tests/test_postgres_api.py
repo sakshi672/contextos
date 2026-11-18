@@ -682,6 +682,56 @@ class PostgresApiTest(unittest.TestCase):
         self.assertEqual(self.call(first, f"/v1/memories/{ready_id}")[1]["data"]["status"], "ready")
         self.assertIn("Visible telescope text", self.call(first, f"/v1/memories/{ready_id}/content")[1]["data"]["body"])
 
+    def test_docx_extraction_reprocess_and_import(self):
+        first, csrf = self.register()
+        second, other_csrf = self.register()
+        account_id = self.started_accounts[-2]
+        output = BytesIO()
+        with ZipFile(output, "w") as archive:
+            archive.writestr("[Content_Types].xml", "<Types/>")
+            archive.writestr("word/document.xml", """<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Orbital research memo</w:t></w:r></w:p><w:p><w:r><w:t>Second paragraph</w:t></w:r></w:p></w:body></w:document>""")
+        docx = output.getvalue()
+        invalid = Request(self.base + "/v1/uploads/docx?filename=bad.docx", data=b"not a zip",
+                          method="POST", headers={"X-CSRF-Token": csrf})
+        with self.assertRaises(HTTPError) as rejected:
+            first.open(invalid, timeout=5)
+        self.assertEqual(rejected.exception.code, 422)
+        request = Request(self.base + "/v1/uploads/docx?filename=notes.docx", data=docx,
+                          method="POST", headers={"X-CSRF-Token": csrf})
+        with first.open(request, timeout=5) as response:
+            memory_id = json.load(response)["data"]["id"]
+        self.assertEqual(self.call(second, f"/v1/memories/{memory_id}/reprocess", "POST", csrf=other_csrf)[0], 404)
+        self.assertTrue(run_once(account_id=account_id))
+        content = self.call(first, f"/v1/memories/{memory_id}/content")[1]["data"]
+        self.assertEqual(content["body"], "Orbital research memo\n\nSecond paragraph")
+        self.assertEqual(content["version"], 1)
+        self.assertEqual(self.call(first, "/v1/memories?q=Orbital&kind=document")[1]["data"]["total"], 1)
+        with connection() as db:
+            db.execute("UPDATE memories SET user_note = 'Keep this note' WHERE id = %s", (memory_id,))
+        queued = self.call(first, f"/v1/memories/{memory_id}/reprocess", "POST", csrf=csrf)
+        self.assertEqual(queued[0], 202)
+        duplicate = self.call(first, f"/v1/memories/{memory_id}/reprocess", "POST", csrf=csrf)
+        self.assertEqual(queued[1]["data"]["job_id"], duplicate[1]["data"]["job_id"])
+        self.assertTrue(run_once(account_id=account_id))
+        self.assertEqual(self.call(first, f"/v1/memories/{memory_id}/content")[1]["data"]["version"], 1)
+        self.assertEqual(self.call(first, f"/v1/memories/{memory_id}")[1]["data"]["user_note"], "Keep this note")
+        with first.open(self.base + "/v1/export", timeout=5) as response:
+            exported = response.read()
+        request = Request(self.base + "/v1/import?format=contextos", data=exported,
+                          method="POST", headers={"X-CSRF-Token": other_csrf})
+        with second.open(request, timeout=5) as response:
+            report = json.load(response)["data"]
+        self.assertEqual((report["imported"], report["failed"]), (1, 0), report)
+        restored_id = report["items"][0]["memory_id"]
+        self.assertEqual(self.call(second, f"/v1/memories/{restored_id}/content")[1]["data"]["body"], content["body"])
+        with connection() as db:
+            key = db.execute("SELECT object_key FROM memory_assets WHERE memory_id = %s", (memory_id,)).fetchone()["object_key"]
+        path_for(key).write_bytes(b"damaged")
+        self.assertEqual(self.call(first, f"/v1/memories/{memory_id}/reprocess", "POST", csrf=csrf)[0], 202)
+        self.assertTrue(run_once(account_id=account_id))
+        self.assertEqual(self.call(first, f"/v1/memories/{memory_id}")[1]["data"]["status"], "failed")
+        self.assertEqual(self.call(first, f"/v1/memories/{memory_id}/content")[1]["data"]["body"], content["body"])
+
 
 if __name__ == "__main__":
     unittest.main()

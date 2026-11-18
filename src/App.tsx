@@ -81,6 +81,7 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
   const fileRef = useRef<HTMLInputElement>(null)
   const imageRef = useRef<HTMLInputElement>(null)
   const pdfRef = useRef<HTMLInputElement>(null)
+  const docxRef = useRef<HTMLInputElement>(null)
   const importRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async (
@@ -142,7 +143,7 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
     items.find(item => item.id === selectedId) ?? null
 
   useEffect(() => {
-    if (!selected || !['document', 'web_page', 'snippet', 'pdf'].includes(selected.kind) || !['ready', 'partial'].includes(selected.status)) {
+    if (!selected || !['document', 'web_page', 'snippet', 'pdf'].includes(selected.kind)) {
       setExtracted(null)
       return
     }
@@ -154,7 +155,7 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
   }, [selected?.id, selected?.kind, selected?.status])
 
   useEffect(() => {
-    if (selected?.kind !== 'pdf' || !['ready', 'partial'].includes(selected.status)) { setPdfPages([]); return }
+    if (selected?.kind !== 'pdf') { setPdfPages([]); return }
     let active = true
     api<{ items: { page_number: number; body: string }[] }>(`/memories/${selected.id}/passages`)
       .then(value => { if (active) setPdfPages(value.items) })
@@ -247,6 +248,39 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
     } finally {
       setUploading(false)
       if (pdfRef.current) pdfRef.current.value = ''
+    }
+  }
+
+  async function uploadDocx(file: File | undefined) {
+    if (!file) return
+    if (!/\.docx$/i.test(file.name)) { setError('Choose a DOCX file.'); return }
+    if (file.size > 25 * 1024 * 1024) { setError('DOCX exceeds the 25 MiB limit.'); return }
+    setUploading(true)
+    setError('')
+    try {
+      await api(`/uploads/docx?filename=${encodeURIComponent(file.name)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }, body: file,
+      })
+      setToast('DOCX saved. Extracting text...')
+      setPage(0)
+      await load(query, filter, 0, sort)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not upload DOCX.')
+    } finally {
+      setUploading(false)
+      if (docxRef.current) docxRef.current.value = ''
+    }
+  }
+
+  async function reprocess(item: Memory) {
+    setError('')
+    try {
+      await api(`/memories/${item.id}/reprocess`, { method: 'POST' })
+      setToast('Extraction queued from the saved original')
+      setDirectMemory({ ...item, status: 'pending' })
+      await load(query, filter, page, sort, true)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not queue extraction.')
     }
   }
 
@@ -355,6 +389,8 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
           <input ref={imageRef} type="file" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" hidden onChange={event => { void uploadImage(event.target.files?.[0]) }} />
           <button className="nav-item" disabled={uploading} onClick={() => { pdfRef.current?.click(); setMobileNav(false) }}><FileText size={18} /> Upload PDF <Plus size={15} className="nav-end" /></button>
           <input ref={pdfRef} type="file" accept=".pdf,application/pdf" hidden onChange={event => { void uploadPdf(event.target.files?.[0]) }} />
+          <button className="nav-item" disabled={uploading} onClick={() => { docxRef.current?.click(); setMobileNav(false) }}><FileText size={18} /> Upload DOCX <Plus size={15} className="nav-end" /></button>
+          <input ref={docxRef} type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden onChange={event => { void uploadDocx(event.target.files?.[0]) }} />
           <button className="nav-item" disabled={pairingBusy} onClick={() => void createPairing()}><Link2 size={18} /> {pairingBusy ? 'Creating code...' : 'Connect extension'} <ArrowRight size={15} className="nav-end" /></button>
           <div className="sidebar-divider" />
           <div className="nav-label">YOUR DATA</div>
@@ -395,12 +431,13 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
             <h2>{selected.title}</h2>
             {selected.source_url && <a className="source-link" href={selected.source_url} target="_blank" rel="noopener noreferrer">{domain(selected.source_url)} <ExternalLink size={15} /></a>}
             {['document', 'image', 'pdf'].includes(selected.kind) && <a className="source-link" href={`/v1/uploads/${selected.id}/original`}>Download original <ExternalLink size={15} /></a>}
+            {['document', 'pdf'].includes(selected.kind) && <button className="source-link" disabled={['pending', 'processing'].includes(selected.status)} onClick={() => void reprocess(selected)}>Reprocess original <ArrowRight size={15} /></button>}
             {selected.kind === 'web_page' && selected.has_screenshot && <a className="source-link" href={`/v1/uploads/${selected.id}/screenshot`} target="_blank" rel="noopener noreferrer">View saved screenshot <ExternalLink size={15} /></a>}
             <div className="detail-divider" />
             {selected.kind === 'image' && <><div className="detail-section-title">Preview</div><img className="memory-image-preview" src={`/v1/uploads/${selected.id}/preview`} alt={selected.title} /><p className="detail-note">Image saved. Text recognition is not available yet.</p><div className="detail-divider" /></>}
             {['web_page', 'snippet'].includes(selected.kind) && <><div className="detail-section-title">Your note</div><p className="detail-note">{selected.note || 'No note added yet.'}</p><div className="detail-divider" /></>}
             {selected.kind !== 'image' && <><div className="detail-section-title">{selected.kind === 'document' || selected.kind === 'pdf' ? 'Extracted text' : selected.kind === 'web_page' ? 'Captured page text' : selected.kind === 'snippet' ? 'Pasted text' : 'Your note'}</div>
-            {selected.kind === 'pdf' ? <div className="pdf-pages">{pdfPages.length ? pdfPages.map(page => <section key={page.page_number}><strong>Page {page.page_number}</strong><p className="detail-note">{page.body}</p></section>) : <p className="detail-note">{selected.status === 'partial' ? 'No selectable text was found. This PDF may be scanned; OCR is still pending.' : selected.status === 'failed' ? 'PDF text extraction failed. The original file is still available.' : 'Extracting PDF text...'}</p>}{selected.status === 'partial' && pdfPages.length > 0 && <p className="detail-note">Some pages have no selectable text. OCR is still pending for those pages.</p>}</div> : <p className="detail-note">{selected.kind === 'document' ? selected.status === 'ready' ? extracted ?? 'Loading text...' : selected.status === 'failed' ? 'Text extraction failed. The original file is still available.' : 'Extracting text from the original file...' : selected.kind === 'web_page' ? selected.status === 'ready' ? extracted ?? 'Loading captured text...' : `Only the URL and title were saved (${selected.capture_reason || 'text unavailable'}). Try saving the page again from the extension.` : selected.kind === 'snippet' ? extracted ?? 'Loading pasted text...' : selected.note || 'No note added yet.'}</p>}
+            {selected.kind === 'pdf' ? <div className="pdf-pages">{pdfPages.length ? pdfPages.map(page => <section key={page.page_number}><strong>Page {page.page_number}</strong><p className="detail-note">{page.body}</p></section>) : <p className="detail-note">{selected.status === 'partial' ? 'No selectable text was found. This PDF may be scanned; OCR is still pending.' : selected.status === 'failed' ? 'PDF text extraction failed. The original file is still available.' : 'Extracting PDF text...'}</p>}{selected.status === 'failed' && pdfPages.length > 0 && <p className="detail-note">Latest retry failed. Showing previously extracted text.</p>}{selected.status === 'partial' && pdfPages.length > 0 && <p className="detail-note">Some pages have no selectable text. OCR is still pending for those pages.</p>}</div> : <p className="detail-note">{selected.kind === 'document' ? extracted ?? (selected.status === 'failed' ? 'Text extraction failed. The original file is still available.' : selected.status === 'partial' ? 'No readable text was found in this document.' : 'Extracting text from the original file...') : selected.kind === 'web_page' ? selected.status === 'ready' ? extracted ?? 'Loading captured text...' : `Only the URL and title were saved (${selected.capture_reason || 'text unavailable'}). Try saving the page again from the extension.` : selected.kind === 'snippet' ? extracted ?? 'Loading pasted text...' : selected.note || 'No note added yet.'}</p>}
             <div className="detail-divider" /></>}
             <div className="detail-section-title">Details</div><div className="detail-meta"><span>Type</span><strong>{selected.kind === 'web_page' ? 'Web page' : selected.kind === 'link' ? 'Link' : selected.kind === 'document' ? 'Document' : selected.kind === 'pdf' ? 'PDF' : selected.kind === 'image' ? 'Image' : selected.kind === 'snippet' ? 'Pasted text' : 'Note'}</strong><span>Saved</span><strong>{formatDate(selected.captured_at)}</strong><span>Updated</span><strong>{formatDate(selected.updated_at)}</strong><span>Status</span><strong>{selected.status}</strong>{selected.original_asset && <><span>File</span><strong>{selected.original_asset.source_filename}</strong><span>Format</span><strong>{selected.original_asset.mime_type}</strong><span>Size</span><strong>{(selected.original_asset.byte_size / 1024).toFixed(1)} KiB</strong></>}{selected.project_name && <><span>Project</span><strong>{selected.project_name}</strong></>}</div>
             <div className="detail-actions">{['note', 'link', 'snippet'].includes(selected.kind) && <button className="secondary-button" onClick={() => void openEdit(selected)}>Edit memory</button>}<button className="delete-button" onClick={() => void remove(selected)}><Trash2 size={16} /> Delete</button></div>

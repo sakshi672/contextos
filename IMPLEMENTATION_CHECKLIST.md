@@ -67,11 +67,11 @@ Mark a box `[x]` only when the task is implemented and its stated behavior has b
 - [ ] Add manual URL capture in the web app with readable-text extraction and available source, author, publication date, and image metadata. Preserve a permitted snapshot or archived copy where practical; clearly show when only extracted text or a URL was saved.
 - [x] Add standalone notes and pasted text/snippet capture. Pasted text is versioned user content that can be edited, searched, and exported/imported.
 - [x] Add PDF upload (50 MiB, 200 pages), worker-based text extraction, page references, and a partial status for pages needing OCR. Preserve the original when extraction fails.
-- [ ] Add the selected launch document formats with extraction and clear unsupported-format feedback.
+- [x] Add the selected launch document formats (UTF-8 TXT/Markdown and DOCX) with extraction and clear unsupported-format feedback.
 - [x] Add PNG/JPEG/WebP image and screenshot-file upload with a private preview and original filename, MIME type, and size metadata. Browser visible-tab screenshots remain a separate Phase 2 action.
 - [ ] Add OCR for supported images and scanned PDFs, with processing limits and failure states.
 - [x] Build a durable extraction-job queue and pending/processing/ready/partial/failed statuses so text files and PDFs appear in Library before extraction completes.
-- [ ] Allow reprocessing a source without overwriting the original or user-authored notes.
+- [x] Allow reprocessing a saved TXT/Markdown, DOCX, or PDF original without overwriting the original, prior extracted text, or user-authored notes.
 - [ ] Preserve extraction provenance and content version/hash so derived data can be refreshed safely.
 - [ ] Verify one successful and one failed extraction path for each supported source type.
 - [ ] **Phase 3 exit:** each supported source can be saved, inspected, deleted, and searched when text is available.
