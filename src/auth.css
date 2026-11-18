@@ -26,3 +26,5 @@ a.nav-item{text-decoration:none}
 .pagination button:disabled{opacity:.45;cursor:default}
 @media(max-width:700px){.sort-select{align-self:flex-start}.pagination{padding:14px 19px}.filters{flex-wrap:wrap}}
 @media(max-width:500px){.auth-card{padding:30px 24px}.auth-card h1{font-size:31px}.topbar-caption{display:none}}
+.memory-image-preview{display:block;max-width:100%;max-height:420px;object-fit:contain;border:1px solid #e7e9eb;border-radius:12px;background:#f7f8f7;margin:12px 0 18px}
+.pdf-pages section{padding:14px 0;border-bottom:1px solid #eceeec}.pdf-pages section:last-child{border-bottom:0}.pdf-pages strong{display:block;margin-bottom:8px;color:#505a68;font-size:11px;letter-spacing:.04em}

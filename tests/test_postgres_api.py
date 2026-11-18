@@ -19,6 +19,8 @@ from unittest.mock import patch
 import uvicorn
 import psycopg
 from psycopg import sql
+from pypdf import PdfWriter
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from backend.contextos.database import connection
 from backend.contextos.local_db import ENV_FILE, load_env
@@ -547,6 +549,138 @@ class PostgresApiTest(unittest.TestCase):
         self.assertNotEqual(updated["data"]["memory"]["id"], memory_id)
         self.assertTrue(updated["data"]["text_saved"])
         self.assertEqual(self.call(user, "/v1/memories?kind=web_page")[1]["data"]["total"], 2)
+
+    def test_pasted_text_capture_edit_search_and_export(self):
+        first, csrf = self.register()
+        second, other_csrf = self.register()
+        payload = {"kind": "snippet", "title": "Workshop excerpt", "body": "An unusual blue telescope",
+                   "user_note": "Discuss with team"}
+        self.assertEqual(self.call(first, "/v1/memories", "POST", {**payload, "body": "   "}, csrf)[0], 422)
+        status, result = self.call(first, "/v1/memories", "POST", payload, csrf)
+        self.assertEqual(status, 201, result)
+        memory_id = result["data"]["id"]
+        self.assertEqual(self.call(first, f"/v1/memories/{memory_id}/content")[1]["data"]["body"], payload["body"])
+        self.assertEqual(self.call(first, "/v1/memories?q=telescope&kind=snippet")[1]["data"]["total"], 1)
+        self.assertEqual(self.call(second, f"/v1/memories/{memory_id}/content")[0], 404)
+        status, changed = self.call(first, f"/v1/memories/{memory_id}", "PATCH",
+                                    {"body": "A different red telescope", "user_note": "Revised"}, csrf)
+        self.assertEqual(status, 200, changed)
+        self.assertEqual(self.call(first, f"/v1/memories/{memory_id}/content")[1]["data"]["version"], 2)
+        self.assertEqual(self.call(first, "/v1/memories?q=blue&kind=snippet")[1]["data"]["total"], 0)
+        self.assertEqual(self.call(first, "/v1/memories?q=red&kind=snippet")[1]["data"]["total"], 1)
+        with first.open(self.base + "/v1/export", timeout=5) as response:
+            archive = response.read()
+        request = Request(self.base + "/v1/import?format=contextos", data=archive, method="POST",
+                          headers={"X-CSRF-Token": other_csrf, "Content-Type": "application/zip"})
+        with second.open(request, timeout=5) as response:
+            report = json.load(response)["data"]
+        self.assertEqual((report["imported"], report["failed"]), (1, 0), report)
+        restored = report["items"][0]["memory_id"]
+        self.assertEqual(self.call(second, f"/v1/memories/{restored}/content")[1]["data"]["body"],
+                         "A different red telescope")
+        self.assertEqual(self.call(first, f"/v1/memories/{memory_id}", "DELETE", csrf=csrf)[0], 200)
+        self.assertEqual(self.call(first, f"/v1/memories/{memory_id}/content")[0], 404)
+
+    def test_image_upload_preview_isolation_and_export(self):
+        first, csrf = self.register()
+        second, other_csrf = self.register()
+        png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/pZkAAAAASUVORK5CYII=")
+        upload_url = self.base + "/v1/uploads/image?filename=sample.png"
+        invalid = Request(upload_url, data=b"not an image", method="POST",
+                          headers={"X-CSRF-Token": csrf, "Content-Type": "image/png"})
+        with self.assertRaises(HTTPError) as rejected:
+            first.open(invalid, timeout=5)
+        self.assertEqual(rejected.exception.code, 422)
+        request = Request(upload_url, data=png, method="POST",
+                          headers={"X-CSRF-Token": csrf, "Content-Type": "image/png"})
+        with first.open(request, timeout=5) as response:
+            created = json.load(response)["data"]
+        memory_id = created["id"]
+        self.assertEqual(created["status"], "partial")
+        self.assertEqual(self.call(first, "/v1/memories?kind=image")[1]["data"]["total"], 1)
+        with first.open(self.base + f"/v1/uploads/{memory_id}/preview", timeout=5) as response:
+            self.assertEqual(response.read(), png)
+            self.assertEqual(response.headers["Content-Type"], "image/png")
+        self.assertEqual(self.call(second, f"/v1/uploads/{memory_id}/preview")[0], 404)
+        with first.open(self.base + "/v1/export", timeout=5) as response:
+            archive = response.read()
+        request = Request(self.base + "/v1/import?format=contextos", data=archive, method="POST",
+                          headers={"X-CSRF-Token": other_csrf, "Content-Type": "application/zip"})
+        with second.open(request, timeout=5) as response:
+            report = json.load(response)["data"]
+        self.assertEqual((report["imported"], report["failed"]), (1, 0), report)
+        restored = report["items"][0]["memory_id"]
+        with second.open(self.base + f"/v1/uploads/{restored}/preview", timeout=5) as response:
+            self.assertEqual(response.read(), png)
+        self.assertEqual(self.call(first, f"/v1/memories/{memory_id}", "DELETE", csrf=csrf)[0], 200)
+        self.assertEqual(self.call(first, f"/v1/uploads/{memory_id}/preview")[0], 404)
+
+    def test_pdf_page_extraction_scanned_status_and_export(self):
+        first, csrf = self.register()
+        second, other_csrf = self.register()
+        account_id = self.started_accounts[-2]
+        writer = PdfWriter()
+        page = writer.add_blank_page(width=612, height=792)
+        stream = DecodedStreamObject()
+        stream.set_data(b"BT /F1 14 Tf 72 720 Td (Visible telescope text) Tj ET")
+        page[NameObject("/Contents")] = writer._add_object(stream)
+        page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject({
+            NameObject("/F1"): DictionaryObject({NameObject("/Type"): NameObject("/Font"),
+                NameObject("/Subtype"): NameObject("/Type1"), NameObject("/BaseFont"): NameObject("/Helvetica")})})})
+        writer.add_blank_page(width=612, height=792)
+        output = BytesIO()
+        writer.write(output)
+        pdf = output.getvalue()
+        self.assertTrue(pdf.startswith(b"%PDF-"))
+        request = Request(self.base + "/v1/uploads/pdf?filename=sample.pdf", data=pdf,
+                          method="POST", headers={"X-CSRF-Token": csrf, "Content-Type": "application/pdf"})
+        with first.open(request, timeout=5) as response:
+            created = json.load(response)["data"]
+        memory_id = created["id"]
+        self.assertEqual(created["status"], "pending")
+        self.assertEqual(self.call(second, f"/v1/uploads/{memory_id}/original")[0], 404)
+        self.assertTrue(run_once(account_id=account_id))
+        detail = self.call(first, f"/v1/memories/{memory_id}")[1]["data"]
+        self.assertEqual(detail["status"], "partial")
+        self.assertEqual(detail["capture_reason"], "scanned_pdf_needs_ocr")
+        self.assertEqual(detail["original_asset"]["mime_type"], "application/pdf")
+        passages = self.call(first, f"/v1/memories/{memory_id}/passages")[1]["data"]["items"]
+        self.assertEqual(len(passages), 1)
+        self.assertEqual(passages[0]["page_number"], 1)
+        self.assertIn("Visible telescope text", passages[0]["body"])
+        self.assertEqual(self.call(first, "/v1/memories?q=telescope&kind=pdf")[1]["data"]["total"], 1)
+        self.assertEqual(self.call(second, f"/v1/memories/{memory_id}/passages")[0], 404)
+        with first.open(self.base + "/v1/export", timeout=5) as response:
+            archive = response.read()
+        request = Request(self.base + "/v1/import?format=contextos", data=archive, method="POST",
+                          headers={"X-CSRF-Token": other_csrf, "Content-Type": "application/zip"})
+        with second.open(request, timeout=5) as response:
+            report = json.load(response)["data"]
+        self.assertEqual((report["imported"], report["failed"]), (1, 0), report)
+        restored = report["items"][0]["memory_id"]
+        restored_pages = self.call(second, f"/v1/memories/{restored}/passages")[1]["data"]["items"]
+        self.assertEqual(self.call(second, f"/v1/memories/{restored}")[1]["data"]["capture_reason"],
+                         "scanned_pdf_needs_ocr")
+        self.assertEqual(restored_pages[0]["page_number"], 1)
+        self.assertIn("Visible telescope text", restored_pages[0]["body"])
+        corrupt = Request(self.base + "/v1/uploads/pdf?filename=broken.pdf", data=b"%PDF-not-a-real-file",
+                          method="POST", headers={"X-CSRF-Token": csrf, "Content-Type": "application/pdf"})
+        with first.open(corrupt, timeout=5) as response:
+            broken_id = json.load(response)["data"]["id"]
+        self.assertTrue(run_once(account_id=account_id))
+        self.assertEqual(self.call(first, f"/v1/memories/{broken_id}")[1]["data"]["status"], "failed")
+        self.assertEqual(self.call(first, f"/v1/memories/{broken_id}/content")[0], 404)
+        ready_writer = PdfWriter()
+        ready_writer.add_page(page)
+        ready_output = BytesIO()
+        ready_writer.write(ready_output)
+        request = Request(self.base + "/v1/uploads/pdf?filename=complete.pdf", data=ready_output.getvalue(),
+                          method="POST", headers={"X-CSRF-Token": csrf, "Content-Type": "application/pdf"})
+        with first.open(request, timeout=5) as response:
+            ready_id = json.load(response)["data"]["id"]
+        self.assertTrue(run_once(account_id=account_id))
+        self.assertEqual(self.call(first, f"/v1/memories/{ready_id}")[1]["data"]["status"], "ready")
+        self.assertIn("Visible telescope text", self.call(first, f"/v1/memories/{ready_id}/content")[1]["data"]["body"])
 
 
 if __name__ == "__main__":
