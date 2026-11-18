@@ -119,6 +119,49 @@ class PostgresApiTest(unittest.TestCase):
     def extract_test_document(self, account_id, memory_id):
         extract_text({"memory_id": uuid.UUID(str(memory_id)), "account_id": uuid.UUID(str(account_id))})
 
+    def test_ranked_search_indexes_content_metadata_and_isolates_accounts(self):
+        first, csrf = self.register()
+        second, second_csrf = self.register()
+        title = self.call(first, "/v1/memories", "POST", {
+            "kind": "note", "title": "Telescope planning", "user_note": "Observing schedule",
+        }, csrf)[1]["data"]["id"]
+        content = self.call(first, "/v1/memories", "POST", {
+            "kind": "snippet", "title": "Night journal", "body": "We carried a telescope to the hill.",
+        }, csrf)[1]["data"]["id"]
+        source = self.call(first, "/v1/memories", "POST", {
+            "kind": "link", "title": "Observatory", "source_uri": "https://astronomy.example.test/guide",
+        }, csrf)[1]["data"]["id"]
+        self.call(second, "/v1/memories", "POST", {
+            "kind": "note", "title": "Telescope belonging to another account",
+        }, second_csrf)
+
+        status, result = self.call(first, "/v1/search?q=telescope")
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["data"]["total"], 2)
+        self.assertEqual([item["id"] for item in result["data"]["items"]], [title, content])
+        self.assertIn("title", result["data"]["items"][0]["match_reasons"])
+        self.assertIn("content", result["data"]["items"][1]["match_reasons"])
+        self.assertIn("[telescope]", result["data"]["items"][1]["snippet"].lower())
+        self.assertEqual(self.call(second, "/v1/search?q=telescope")[1]["data"]["total"], 1)
+        self.assertEqual(self.call(first, "/v1/search?q=astronomy")[1]["data"]["items"][0]["id"], source)
+        self.assertEqual(self.call(first, "/v1/search?q=telescope&kind=snippet")[1]["data"]["items"][0]["id"], content)
+        self.assertEqual(self.call(first, "/v1/search?q=telescope&domain=astronomy.example.test")[1]["data"]["total"], 0)
+        self.assertEqual(self.call(first, "/v1/search?q=telescope&date_from=2099-01-01")[1]["data"]["total"], 0)
+        project_id = uuid.uuid4()
+        with connection() as db:
+            account_id = self.started_accounts[-2]
+            db.execute("INSERT INTO projects (id, account_id, name) VALUES (%s, %s, %s)",
+                       (project_id, account_id, "Sky study"))
+            db.execute("INSERT INTO memory_projects (memory_id, project_id, account_id) VALUES (%s, %s, %s)",
+                       (title, project_id, account_id))
+        self.assertEqual(self.call(first, f"/v1/search?q=telescope&project_id={project_id}")[1]["data"]["items"][0]["id"], title)
+        self.assertEqual(self.call(second, f"/v1/search?q=telescope&project_id={project_id}")[1]["data"]["total"], 0)
+
+        self.call(first, f"/v1/memories/{title}", "PATCH", {"title": "Meteor planning"}, csrf)
+        self.assertEqual(self.call(first, "/v1/search?q=telescope")[1]["data"]["total"], 1)
+        self.call(first, f"/v1/memories/{content}", "DELETE", csrf=csrf)
+        self.assertEqual(self.call(first, "/v1/search?q=telescope")[1]["data"]["total"], 0)
+
     def test_owned_memory_flow_and_csrf(self):
         first, first_csrf = self.register()
         second, second_csrf = self.register()

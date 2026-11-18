@@ -79,8 +79,8 @@ Mark a box `[x]` only when the task is implemented and its stated behavior has b
 ## Phase 4 — Search and organization
 
 - [x] Index the current title, URL, and user note fields with SQLite FTS5 and verify search and reindexing after edits.
-- [ ] Index titles, extracted text, user notes, and relevant source metadata for keyword/full-text search.
-- [ ] Build the global Search screen with ranked results and clear reasons each result matched.
+- [x] Index titles, extracted text, user notes, and relevant source metadata for keyword/full-text search.
+- [x] Build the global Search screen with ranked results and clear reasons each result matched.
 - [ ] Add filters for type, source/domain, capture date, project, tag, and collection where applicable.
 - [ ] Add search within a project and preserve filters across result/detail navigation.
 - [ ] Create projects and associate one memory with multiple projects without copying it.
@@ -88,7 +88,7 @@ Mark a box `[x]` only when the task is implemented and its stated behavior has b
 - [ ] Support moving from a search result to the original source or relevant text/page when available.
 - [ ] Handle no results, ambiguous queries, extraction gaps, and deleted items clearly.
 - [ ] Run the retrieval corpus from Phase 0; record correct-result rank and time to find the intended item.
-- [ ] Test search isolation so one account's queries cannot return another account's content.
+- [x] Test search isolation so one account's queries cannot return another account's content.
 - [ ] **Phase 4 exit:** users can reliably recover known items across source types and organize them without duplication.
 
 ## Phase 5 — Context exploration
