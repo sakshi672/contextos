@@ -39,6 +39,9 @@ def export_account(background_tasks: BackgroundTasks, session: dict = Depends(cu
             "status, is_active, created_at FROM memory_contents WHERE account_id = %s "
             "ORDER BY memory_id, provenance, version", (account_id,),
         ).fetchall()
+        passages = db.execute("""SELECT id, memory_id, content_id, ordinal, body, page_number,
+            section_label, start_offset, end_offset FROM content_passages WHERE account_id = %s
+            ORDER BY memory_id, content_id, ordinal""", (account_id,)).fetchall()
         assets = db.execute(
             "SELECT id, memory_id, role, object_key, mime_type, byte_size, sha256, "
             "source_filename, created_at FROM memory_assets "
@@ -61,6 +64,7 @@ def export_account(background_tasks: BackgroundTasks, session: dict = Depends(cu
         with ZipFile(output, "x", compression=ZIP_DEFLATED, compresslevel=6) as archive:
             write_jsonl(archive, "memories.jsonl", memories)
             write_jsonl(archive, "contents.jsonl", contents)
+            write_jsonl(archive, "passages.jsonl", passages)
             write_jsonl(archive, "projects.jsonl", projects)
             write_jsonl(archive, "memory_projects.jsonl", assignments)
             for asset in assets:
@@ -78,6 +82,7 @@ def export_account(background_tasks: BackgroundTasks, session: dict = Depends(cu
                 "format": "contextos-account-export", "version": 1,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "memory_count": len(memories), "content_count": len(contents),
+                "passage_count": len(passages),
                 "asset_count": len(exported_assets),
                 "project_count": len(projects), "assignment_count": len(assignments),
             }, indent=2).encode("utf-8"))
