@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from .auth import write_session
 from .database import connection
 from .memories import clean_title, source_domain
+from .captures import assign_project
 from .storage import delete, object_key, path_for
 
 router = APIRouter(prefix="/v1", tags=["import"])
@@ -60,7 +61,7 @@ def parse_export(raw: bytes):
     try:
         with ZipFile(BytesIO(raw)) as archive:
             infos = archive.infolist()
-            if len(infos) > MAX_RECORDS * 2 + 4 or sum(info.file_size for info in infos) > MAX_EXPANDED_BYTES:
+            if len(infos) > MAX_RECORDS * 2 + 6 or sum(info.file_size for info in infos) > MAX_EXPANDED_BYTES:
                 raise ValueError("Export exceeds import limits")
             names = [info.filename for info in infos]
             if len(names) != len(set(names)) or any(
@@ -73,24 +74,39 @@ def parse_export(raw: bytes):
             memories = read_jsonl(archive, "memories.jsonl")
             contents = read_jsonl(archive, "contents.jsonl")
             assets = read_jsonl(archive, "assets.jsonl")
+            projects = read_jsonl(archive, "projects.jsonl") if "projects.jsonl" in names else []
+            assignments = read_jsonl(archive, "memory_projects.jsonl") if "memory_projects.jsonl" in names else []
             if (len(memories) > MAX_RECORDS or len(contents) > MAX_RECORDS * 5 or
-                len(assets) > MAX_RECORDS or any(manifest.get(key) != count for key, count in (
+                len(assets) > MAX_RECORDS or len(projects) > MAX_RECORDS or len(assignments) > MAX_RECORDS or
+                any(manifest.get(key) != count for key, count in (
                     ("memory_count", len(memories)), ("content_count", len(contents)),
                     ("asset_count", len(assets))))):
                 raise ValueError("Export counts do not match")
+            if ("project_count" in manifest and manifest["project_count"] != len(projects)) or (
+                "assignment_count" in manifest and manifest["assignment_count"] != len(assignments)):
+                raise ValueError("Project counts do not match")
+            project_names = {row["id"]: row["name"] for row in projects}
+            if len(project_names) != len(projects):
+                raise ValueError("Duplicate project ID")
+            project_for_memory = {}
+            for assignment in assignments:
+                project_for_memory.setdefault(assignment["memory_id"], []).append(project_names[assignment["project_id"]])
+            if any(len(names) > 1 for names in project_for_memory.values()):
+                raise ValueError("Multiple projects per memory are not supported yet")
             originals = {}
             for asset in assets:
                 path = asset["path"]
                 if path != f"originals/{uuid.UUID(asset['id'])}":
                     raise ValueError("Invalid original path")
                 info = archive.getinfo(path)
-                if info.file_size > 10 * 1024 * 1024:
-                    raise ValueError("Original exceeds 10 MiB")
+                limit = 20 * 1024 * 1024 if asset.get("role") == "screenshot" else 10 * 1024 * 1024
+                if info.file_size > limit:
+                    raise ValueError("Original exceeds its size limit")
                 body = archive.read(path)
                 if len(body) != asset["byte_size"] or hashlib.sha256(body).hexdigest() != asset["sha256"]:
                     raise ValueError("Original checksum mismatch")
                 originals[asset["id"]] = body
-            return memories, contents, assets, originals
+            return memories, contents, assets, originals, project_for_memory
     except (BadZipFile, KeyError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
         raise HTTPException(422, detail=f"Invalid Context OS export: {exc}") from exc
 
@@ -104,9 +120,9 @@ def timestamp(value, default=None):
     return parsed
 
 
-def import_record(account_id, row, contents, assets, originals):
+def import_record(account_id, row, contents, assets, originals, project_name=None):
     kind = row["kind"]
-    if kind not in {"note", "link", "document"}:
+    if kind not in {"note", "link", "document", "web_page"}:
         raise ValueError("Unsupported memory type")
     title = clean_title(row["title"])
     if len(title) > 240:
@@ -115,13 +131,17 @@ def import_record(account_id, row, contents, assets, originals):
     if len(note) > 20000:
         raise ValueError("Note too long")
     uri = row.get("source_uri")
-    domain = source_domain(kind, uri) if kind in {"note", "link"} else None
+    domain = source_domain(kind, uri) if kind in {"note", "link", "web_page"} else None
     if kind == "document" and uri:
         raise ValueError("Documents cannot have a source URL")
     if kind == "document" and len(assets) != 1:
         raise ValueError("Document needs one original")
-    if kind != "document" and assets:
-        raise ValueError("Only documents support originals")
+    if kind == "document" and assets[0]["role"] != "original":
+        raise ValueError("Document needs an original")
+    if kind == "web_page" and (len(assets) > 1 or any(asset["role"] != "screenshot" for asset in assets)):
+        raise ValueError("Web page assets must be a single screenshot")
+    if kind in {"note", "link"} and assets:
+        raise ValueError("This memory type cannot include files")
     memory_id = uuid.uuid4()
     keys = []
     try:
@@ -132,18 +152,29 @@ def import_record(account_id, row, contents, assets, originals):
             elif kind == "note":
                 duplicate = db.execute("SELECT id FROM memories WHERE account_id = %s AND kind = 'note' AND title = %s AND user_note = %s LIMIT 1",
                                        (account_id, title, note)).fetchone()
-            else:
+            elif kind == "document":
                 duplicate = db.execute("""SELECT m.id FROM memories m JOIN memory_assets a ON a.memory_id = m.id
                     WHERE m.account_id = %s AND m.kind = 'document' AND a.sha256 = %s LIMIT 1""",
                     (account_id, assets[0]["sha256"])).fetchone()
+            else:
+                source_content = next((item["content_sha256"] for item in contents if item.get("provenance") == "source" and item.get("is_active")), None)
+                duplicate = db.execute("""SELECT m.id FROM memories m LEFT JOIN memory_contents c
+                    ON c.memory_id = m.id AND c.provenance = 'source' AND c.is_active
+                    WHERE m.account_id = %s AND m.kind = 'web_page' AND m.source_uri = %s
+                    AND m.user_note = %s AND c.content_sha256 IS NOT DISTINCT FROM %s LIMIT 1""",
+                    (account_id, uri, note, source_content)).fetchone()
             if duplicate:
+                if project_name:
+                    assign_project(db, account_id, duplicate["id"], project_name)
                 return "duplicate", str(duplicate["id"])
             db.execute("""INSERT INTO memories (id, account_id, kind, title, source_uri, source_domain,
-                captured_at, published_at, status, user_note, created_at, updated_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                captured_at, published_at, status, user_note, capture_reason, created_at, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (memory_id, account_id, kind, title, uri, domain, timestamp(row.get("captured_at")),
                  timestamp(row["published_at"]) if row.get("published_at") else None,
-                 "ready", note, timestamp(row.get("created_at")), timestamp(row.get("updated_at"))))
+                 row.get("status") if kind == "web_page" and row.get("status") in {"ready", "partial"} else "ready",
+                 note, row.get("capture_reason") if kind == "web_page" else None,
+                 timestamp(row.get("created_at")), timestamp(row.get("updated_at"))))
             for asset in assets:
                 asset_id = uuid.uuid4()
                 key = object_key(account_id, memory_id, asset_id)
@@ -168,6 +199,8 @@ def import_record(account_id, row, contents, assets, originals):
                     (uuid.uuid4(), account_id, memory_id, content["version"], content["provenance"],
                      body, content["content_sha256"], content.get("processor_version"),
                      content["status"], content["is_active"], timestamp(content.get("created_at"))))
+            if project_name:
+                assign_project(db, account_id, memory_id, project_name)
     except BaseException:
         for key in keys:
             delete(key)
@@ -189,7 +222,7 @@ async def import_data(request: Request, format: str = Query(pattern="^(contextos
     if not raw:
         raise HTTPException(422, detail="Import is empty")
     if format == "contextos":
-        memories, contents, assets, originals = parse_export(raw)
+        memories, contents, assets, originals, project_for_memory = parse_export(raw)
     else:
         try:
             parser = BookmarkParser()
@@ -206,7 +239,7 @@ async def import_data(request: Request, format: str = Query(pattern="^(contextos
                 captured = None
             memories.append({"id": str(uuid.uuid4()), "kind": "link", "title": item["title"].strip() or item["source_uri"],
                              "source_uri": item["source_uri"], "captured_at": captured})
-        contents, assets, originals = [], [], {}
+        contents, assets, originals, project_for_memory = [], [], {}, {}
     content_by_memory = {}
     asset_by_memory = {}
     for row in contents:
@@ -216,11 +249,14 @@ async def import_data(request: Request, format: str = Query(pattern="^(contextos
     memory_ids = {row.get("id") for row in memories}
     if format == "contextos" and (set(content_by_memory) | set(asset_by_memory)) - memory_ids:
         raise HTTPException(422, detail="Export has unowned content or assets")
+    if set(project_for_memory) - memory_ids:
+        raise HTTPException(422, detail="Export has unowned project assignments")
     report = {"imported": 0, "duplicates": 0, "failed": 0, "items": []}
     for index, row in enumerate(memories):
         try:
             state, target_id = import_record(session["account_id"], row,
-                content_by_memory.get(row["id"], []), asset_by_memory.get(row["id"], []), originals)
+                content_by_memory.get(row["id"], []), asset_by_memory.get(row["id"], []), originals,
+                project_for_memory.get(row["id"], [None])[0])
         except (ValueError, KeyError, TypeError, HTTPException, UnicodeError) as exc:
             state, target_id = "failed", None
             error = exc.detail if isinstance(exc, HTTPException) else str(exc)

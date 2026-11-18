@@ -101,3 +101,17 @@ def download_original(memory_id: uuid.UUID, session: dict = Depends(current_sess
     if not path.is_file():
         raise HTTPException(404, detail="Original file unavailable")
     return FileResponse(path, media_type=asset["mime_type"], filename=asset["source_filename"])
+
+
+@router.get("/{memory_id}/screenshot")
+def download_screenshot(memory_id: uuid.UUID, session: dict = Depends(current_session)):
+    with connection() as db:
+        asset = db.execute("""SELECT object_key, mime_type FROM memory_assets
+            WHERE memory_id = %s AND account_id = %s AND role = 'screenshot' AND storage_state = 'stored'
+            LIMIT 1""", (memory_id, session["account_id"])).fetchone()
+    if not asset:
+        raise HTTPException(404, detail="Screenshot not found")
+    path = path_for(asset["object_key"])
+    if not path.is_file():
+        raise HTTPException(404, detail="Screenshot unavailable")
+    return FileResponse(path, media_type=asset["mime_type"])

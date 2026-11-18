@@ -11,6 +11,7 @@
 .auth-switch button:hover{text-decoration:underline}
 .auth-switch .auth-recover{margin-top:12px}
 .form-notice{margin-top:16px;padding:11px 13px;border-radius:8px;background:#edf4ee;color:#376149;font-size:12px;line-height:1.5}
+.pairing-help{font-size:12px;line-height:1.55;color:#7c8591;margin:4px 0 16px}.pairing-help code{font-size:11px;color:#525f74}.pairing-code{border:1px solid #dfe3ec;background:#f6f7fa;border-radius:10px;padding:15px;text-align:center;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:17px;letter-spacing:.04em;color:#28334c;overflow-wrap:anywhere}
 .auth-footnote{display:flex;align-items:center;gap:7px;margin-top:28px;color:#a7acb4;font-size:11px}
 .auth-loading{min-height:100vh;display:flex;align-items:center;justify-content:center;gap:10px;color:#8b929c;font-size:12px}
 .signout-button{border:0;background:transparent;color:#747d89;font-size:11px;font-weight:600;padding:7px 4px}

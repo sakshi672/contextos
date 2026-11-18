@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Context OS</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <main class="popup">
+    <header class="header"><span class="brand-mark"><span></span></span><strong>context<span>OS</span></strong><button id="settings" class="quiet icon" title="Connection settings" aria-label="Connection settings">•••</button></header>
+    <section id="pair" hidden>
+      <div class="eyebrow">CONNECT YOUR SPACE</div><h1>Keep what matters.</h1>
+      <p>In the web app, choose <b>Connect extension</b> and paste the one-time code here.</p>
+      <label for="code">Pairing code</label><input id="code" autocomplete="off" spellcheck="false" placeholder="Paste your code" />
+      <label for="api-origin">API address</label><input id="api-origin" spellcheck="false" value="http://127.0.0.1:8766" />
+      <label for="web-origin">Web app address</label><input id="web-origin" spellcheck="false" value="http://127.0.0.1:5173" />
+      <button id="connect" class="primary">Connect extension <span>→</span></button>
+      <p class="hint">The local addresses are ready for development. Hosted addresses must use HTTPS.</p>
+    </section>
+    <section id="capture" hidden>
+      <div class="eyebrow" id="account"></div>
+      <div id="progress" class="progress"><span class="pulse"></span><div><strong>Saving this tab</strong><small>Finding readable text on the page…</small></div></div>
+      <div id="result" hidden>
+        <div class="result-head"><span id="result-icon" class="result-icon">✓</span><div><strong id="result-title">Saved to your library</strong><small id="result-detail"></small></div></div>
+        <div class="saved-card"><span id="page-title"></span><small id="page-url"></small></div>
+        <label for="note">Your note</label><textarea id="note" rows="3" maxlength="20000" placeholder="Why is this worth keeping?"></textarea>
+        <label for="project">Project</label><input id="project" list="projects" maxlength="120" placeholder="Add to a project (optional)" /><datalist id="projects"></datalist>
+        <button id="save-details" class="secondary">Save note and project</button>
+        <div class="result-actions"><button id="screenshot" class="quiet">Save visible screenshot</button><button id="open-memory" class="quiet">Open in library ↗</button></div>
+        <button id="retry-text" class="quiet retry-text" hidden>Retry page text capture</button>
+      </div>
+      <div id="failure" hidden><div class="result-head"><span class="result-icon error">!</span><div><strong>Couldn’t save this tab</strong><small id="failure-detail"></small></div></div><button id="retry" class="secondary">Try again</button></div>
+      <button id="disconnect" class="quiet disconnect">Disconnect extension</button>
+    </section>
+    <div id="message" role="status" aria-live="polite"></div>
+  </main>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
