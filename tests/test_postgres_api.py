@@ -120,6 +120,102 @@ class PostgresApiTest(unittest.TestCase):
     def extract_test_document(self, account_id, memory_id):
         extract_text({"memory_id": uuid.UUID(str(memory_id)), "account_id": uuid.UUID(str(account_id))})
 
+    def test_context_exploration_relationships_timeline_and_annotations(self):
+        first, csrf = self.register()
+        second, other_csrf = self.register()
+        left = self.call(first, "/v1/memories", "POST", {
+            "kind": "note", "title": "Research question", "user_note": "A useful hypothesis",
+        }, csrf)[1]["data"]["id"]
+        right = self.call(first, "/v1/memories", "POST", {
+            "kind": "note", "title": "Research evidence", "user_note": "Evidence supports it",
+        }, csrf)[1]["data"]["id"]
+        foreign = self.call(second, "/v1/memories", "POST", {
+            "kind": "note", "title": "Private evidence", "user_note": "Other account",
+        }, other_csrf)[1]["data"]["id"]
+        status, project = self.call(first, "/v1/organization/projects", "POST", {"name": "Research"}, csrf)
+        self.assertEqual(status, 201, project)
+        project_id = project["data"]["id"]
+        for memory_id in (left, right):
+            status, assigned = self.call(first, f"/v1/organization/memories/{memory_id}", "PUT", {
+                "project_ids": [project_id], "tag_ids": [], "collection_ids": [],
+            }, csrf)
+            self.assertEqual(status, 200, assigned)
+
+        relation = {"from_memory_id": left, "to_memory_id": right,
+                    "relation_type": "supports", "explanation": "The evidence tests the hypothesis"}
+        self.assertEqual(self.call(first, "/v1/relationships", "POST", {
+            **relation, "to_memory_id": foreign,
+        }, csrf)[0], 404)
+        self.assertEqual(self.call(first, "/v1/relationships", "POST", {
+            **relation, "to_memory_id": left,
+        }, csrf)[0], 422)
+        status, created = self.call(first, "/v1/relationships", "POST", relation, csrf)
+        self.assertEqual(status, 201, created)
+        relation_id = created["data"]["id"]
+        self.assertEqual(created["data"]["provenance"], "manual")
+        self.assertEqual(self.call(second, "/v1/relationships")[1]["data"]["total"], 0)
+        self.assertEqual(self.call(first, f"/v1/relationships?memory_id={left}")[1]["data"]["total"], 1)
+        graph = self.call(first, f"/v1/relationships/graph?project_id={project_id}")[1]["data"]
+        self.assertEqual(len(graph["nodes"]), 2)
+        self.assertEqual(len(graph["edges"]), 1)
+        self.assertEqual(self.call(second, f"/v1/relationships/{relation_id}", "PATCH", {
+            "explanation": "No access",
+        }, other_csrf)[0], 404)
+        self.assertEqual(self.call(first, f"/v1/relationships/{relation_id}", "PATCH", {
+            "relation_type": "references", "explanation": "A source for the question",
+        }, csrf)[1]["data"]["relation_type"], "references")
+
+        overview = self.call(first, f"/v1/projects/{project_id}/overview")[1]["data"]
+        self.assertEqual(overview["memory_count"], 2)
+        self.assertEqual(overview["connection_count"], 1)
+        self.assertEqual(len(overview["recent_memories"]), 2)
+        self.assertEqual(self.call(second, f"/v1/projects/{project_id}/overview")[0], 404)
+        timeline = self.call(first, f"/v1/timeline?project_id={project_id}&kind=note")[1]["data"]
+        self.assertEqual(timeline["total"], 2)
+        self.assertEqual(self.call(first, "/v1/timeline?date_from=2099-01-01")[1]["data"]["total"], 0)
+        self.assertEqual(self.call(second, f"/v1/timeline?project_id={project_id}")[0], 404)
+
+        status, annotation = self.call(first, f"/v1/memories/{left}/annotations", "POST", {
+            "location_kind": "note", "quote": "useful", "start_offset": 2,
+            "end_offset": 8, "note": "Key qualifier",
+        }, csrf)
+        self.assertEqual(status, 201, annotation)
+        annotation_id = annotation["data"]["id"]
+        self.assertTrue(annotation["data"]["current"])
+        self.assertEqual(self.call(first, f"/v1/memories/{left}/annotations", "POST", {
+            "location_kind": "note", "quote": "wrong", "start_offset": 2, "end_offset": 7,
+        }, csrf)[0], 422)
+        self.assertEqual(self.call(second, f"/v1/memories/{left}/annotations")[0], 404)
+        self.assertEqual(self.call(second, f"/v1/annotations/{annotation_id}", "DELETE", csrf=other_csrf)[0], 404)
+        snippet = self.call(first, "/v1/memories", "POST", {
+            "kind": "snippet", "title": "Quoted source", "body": "Page one says daylight matters.",
+        }, csrf)[1]["data"]["id"]
+        status, content_annotation = self.call(first, f"/v1/memories/{snippet}/annotations", "POST", {
+            "location_kind": "content", "quote": "daylight", "start_offset": 14,
+            "end_offset": 22, "note": "Compare with the question",
+        }, csrf)
+        self.assertEqual(status, 201, content_annotation)
+        self.assertTrue(content_annotation["data"]["current"])
+        self.assertEqual(self.call(first, f"/v1/memories/{snippet}/annotations", "POST", {
+            "location_kind": "content", "quote": "daylight", "start_offset": 14,
+            "end_offset": 22, "page_number": 1,
+        }, csrf)[0], 422)
+        self.call(first, f"/v1/memories/{snippet}", "DELETE", csrf=csrf)
+        self.assertEqual(self.call(first, f"/v1/annotations/{content_annotation['data']['id']}",
+                                   "DELETE", csrf=csrf)[0], 404)
+        self.call(first, f"/v1/memories/{left}", "PATCH", {"user_note": "A revised hypothesis"}, csrf)
+        self.assertFalse(self.call(first, f"/v1/memories/{left}/annotations")[1]["data"]["items"][0]["current"])
+        self.assertEqual(self.call(first, f"/v1/annotations/{annotation_id}", "PATCH", {
+            "note": "Old location",
+        }, csrf)[1]["data"]["note"], "Old location")
+        self.call(first, f"/v1/memories/{left}", "DELETE", csrf=csrf)
+        self.assertEqual(self.call(first, "/v1/relationships")[1]["data"]["total"], 0)
+        self.assertEqual(self.call(first, "/v1/relationships/graph")[1]["data"]["nodes"], [])
+        self.assertEqual(self.call(first, f"/v1/timeline?project_id={project_id}")[1]["data"]["total"], 1)
+        self.assertEqual(self.call(first, f"/v1/annotations/{annotation_id}", "PATCH", {
+            "note": "Gone",
+        }, csrf)[0], 404)
+
     def test_ranked_search_indexes_content_metadata_and_isolates_accounts(self):
         first, csrf = self.register()
         second, second_csrf = self.register()

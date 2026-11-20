@@ -93,15 +93,15 @@ Mark a box `[x]` only when the task is implemented and its stated behavior has b
 
 ## Phase 5 — Context exploration
 
-- [ ] Add manual relationships between memories with type, explanation, and provenance.
-- [ ] Allow users to inspect, edit, and remove relationships.
-- [ ] Build a simple graph view with readable labels, filtering, and direct links to memories.
-- [ ] Provide a list alternative to the graph for accessibility and dense collections.
-- [ ] Build a saved-item timeline with date, type, and project filters.
-- [ ] Build project overview pages showing memories, project search, timeline, and connections.
-- [ ] Add highlights/annotations with a stable page or text location where supported.
-- [ ] Verify that deleting a memory cleans up links, graph entries, timeline entries, and annotations.
-- [ ] **Phase 5 exit:** users can trace and manage context around a memory from project, graph, and timeline views.
+- [x] Add manual relationships between memories with type, explanation, and provenance.
+- [x] Allow users to inspect, edit, and remove relationships.
+- [x] Build a simple graph view with readable labels, filtering, and direct links to memories.
+- [x] Provide a list alternative to the graph for accessibility and dense collections.
+- [x] Build a saved-item timeline with date, type, and project filters.
+- [x] Build project overview pages showing memories, project search, timeline, and connections.
+- [x] Add highlights/annotations with a stable page or text location where supported; changing source text flags the anchor as stale.
+- [x] Verify that deleting a memory cleans up links, graph entries, timeline entries, and annotations (live PostgreSQL test).
+- [x] **Phase 5 exit:** users can trace and manage context around a memory from project, graph, and timeline views. Migration applied, production build passed, and 32 tests passed; visual/accessibility review remains in Phase 7.
 
 ## Phase 6 — Intelligent Memory
 
@@ -133,6 +133,7 @@ Mark a box `[x]` only when the task is implemented and its stated behavior has b
 - [ ] Complete security review for authentication, authorization, uploads, URL fetching, extension messaging, and AI data flow.
 - [ ] Add rate limits, abuse protection, safe error handling, and monitoring without logging raw private content.
 - [ ] Verify backups and a restore procedure with a test restore.
+- [ ] Include relationships and annotations in account ZIP export/import and verify a round trip.
 - [ ] Test performance with a representative library size and document practical limits.
 - [ ] Run end-to-end tests for capture, extraction, search, project use, deletion/export, and assistant citations.
 - [ ] Test the extension on supported browser versions and prepare store listing, permissions description, and privacy disclosures.

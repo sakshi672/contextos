@@ -7,6 +7,8 @@ import {
 import { api, type Session } from './api'
 import { OrganizationPicker, OrganizationView, emptyOrganization,
   type Organization, type OrgEntity } from './Organization'
+import { ConnectionsView, ProjectOverview, TimelineView } from './Exploration'
+import { Annotations, MarkedText, type Annotation, type PdfPage } from './Annotations'
 
 type Kind = 'note' | 'link' | 'snippet'
 type MemoryKind = Kind | 'document' | 'web_page' | 'image' | 'pdf'
@@ -104,7 +106,8 @@ function SearchEmpty({ query }: { query: string }) {
 function App({ session, onSignOut }: { session: Session; onSignOut: () => void }) {
   const [items, setItems] = useState<Memory[]>([])
   const [query, setQuery] = useState('')
-  const [view, setView] = useState<'library' | 'search' | 'organization'>('library')
+  const [view, setView] = useState<'library' | 'search' | 'organization' | 'project' | 'timeline' | 'connections'>('library')
+  const [activeProjectId, setActiveProjectId] = useState('')
   const [searchDomain, setSearchDomain] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -134,7 +137,8 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
   const [uploading, setUploading] = useState(false)
   const [importing, setImporting] = useState(false)
   const [extracted, setExtracted] = useState<string | null>(null)
-  const [pdfPages, setPdfPages] = useState<{ page_number: number; body: string }[]>([])
+  const [pdfPages, setPdfPages] = useState<PdfPage[]>([])
+  const [annotations, setAnnotations] = useState<Annotation[]>([])
   const [manualUrlOpen, setManualUrlOpen] = useState(false)
   const [manualUrl, setManualUrl] = useState('')
   const [manualNote, setManualNote] = useState('')
@@ -152,7 +156,7 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
     const currentRequest = ++requestId.current
     if (!silent) { setLoading(true); setError('') }
     try {
-      if (view === 'organization') {
+      if (view !== 'library' && view !== 'search') {
         setItems([]); setTotal(0); setLoading(false); return
       }
       const params = new URLSearchParams({ q, kind,
@@ -187,7 +191,8 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
   useEffect(() => { void refreshOrganization().catch(() => setError('Could not load projects, tags, and collections.')) }, [refreshOrganization, view])
 
   function openScope(entity: OrgEntity, id: string) {
-    setProjectId(entity === 'projects' ? id : '')
+    if (entity === 'projects') { setActiveProjectId(id); setView('project'); setSelectedId(null); return }
+    setProjectId('')
     setTagId(entity === 'tags' ? id : '')
     setCollectionId(entity === 'collections' ? id : '')
     setQuery(''); setFilter('all'); setPage(0); setView('search')
@@ -231,6 +236,8 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
   const selected = (directMemory?.id === selectedId ? directMemory : null) ??
     items.find(item => item.id === selectedId) ?? null
 
+  useEffect(() => { setAnnotations([]) }, [selected?.id])
+
   useEffect(() => {
     if (!selected || !['document', 'web_page', 'snippet', 'pdf', 'image'].includes(selected.kind)) {
       setExtracted(null)
@@ -247,7 +254,7 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
   useEffect(() => {
     if (selected?.kind !== 'pdf') { setPdfPages([]); return }
     let active = true
-    api<{ items: { page_number: number; body: string }[] }>(`/memories/${selected.id}/passages`)
+    api<{ items: PdfPage[] }>(`/memories/${selected.id}/passages`)
       .then(value => { if (active) setPdfPages(value.items) })
       .catch(() => { if (active) setPdfPages([]) })
     return () => { active = false }
@@ -491,8 +498,8 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
           <button className={view === 'search' ? 'nav-item active' : 'nav-item'} onClick={() => { setView('search'); setPage(0); setSelectedId(null); setMobileNav(false); window.requestAnimationFrame(() => searchRef.current?.focus()) }}><Search size={18} /> Search <span className="nav-shortcut">⌘ K</span></button>
           <div className="nav-label nav-label-spaced">EXPLORE</div>
           <button className={view === 'organization' ? 'nav-item active' : 'nav-item'} onClick={() => { setView('organization'); setSelectedId(null); setMobileNav(false) }}><FolderKanban size={18} /> Projects & organization</button>
-          <button className="nav-item" disabled title="Timeline is planned for a later phase"><Clock3 size={18} /> Timeline <span className="soon">Soon</span></button>
-          <button className="nav-item" disabled title="Connections are planned for a later phase"><GitBranch size={18} /> Connections <span className="soon">Soon</span></button>
+          <button className={view === 'timeline' ? 'nav-item active' : 'nav-item'} onClick={() => { setView('timeline'); setSelectedId(null); setMobileNav(false) }}><Clock3 size={18} /> Timeline</button>
+          <button className={view === 'connections' ? 'nav-item active' : 'nav-item'} onClick={() => { setView('connections'); setSelectedId(null); setMobileNav(false) }}><GitBranch size={18} /> Connections</button>
           <div className="sidebar-divider" />
           <div className="nav-label">QUICK CAPTURE</div>
           <button className="nav-item" onClick={() => { openNew('link'); setMobileNav(false) }}><Link2 size={18} /> Save a link <Plus size={15} className="nav-end" /></button>
@@ -519,14 +526,17 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
 
       <div className="main-shell">
         <header className="topbar">
-          <div className="topbar-left"><button className="icon-button mobile-menu" aria-label="Open menu" onClick={() => setMobileNav(true)}><Menu size={20} /></button><span className="breadcrumb-muted">Workspace</span><span className="breadcrumb-separator">/</span><span className="breadcrumb-current">{view === 'search' ? 'Search' : view === 'organization' ? 'Projects' : 'Library'}</span></div>
+          <div className="topbar-left"><button className="icon-button mobile-menu" aria-label="Open menu" onClick={() => setMobileNav(true)}><Menu size={20} /></button><span className="breadcrumb-muted">Workspace</span><span className="breadcrumb-separator">/</span><span className="breadcrumb-current">{view === 'search' ? 'Search' : view === 'organization' || view === 'project' ? 'Projects' : view === 'timeline' ? 'Timeline' : view === 'connections' ? 'Connections' : 'Library'}</span></div>
           <div className="topbar-right"><span className="topbar-caption">{session.email}</span><button className="signout-button" onClick={onSignOut}>Sign out</button><div className="top-avatar">{session.email[0]?.toUpperCase()}</div></div>
         </header>
 
         <main className="page">
-          <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-dot" /> YOUR KNOWLEDGE, IN ONE PLACE</div><h1>{view === 'search' ? <>Find what matters<br /><em>again.</em></> : view === 'organization' ? <>Keep ideas<br /><em>connected.</em></> : <>Good things are worth<br /><em>remembering.</em></>}</h1><p className="page-intro">{view === 'search' ? 'Search titles, notes, sources, and saved text.' : view === 'organization' ? 'Projects, collections, and tags give your memories a home.' : 'Everything you save, ready when you need it.'}</p></div><button className="primary-button heading-save" onClick={() => openNew('link')}><Plus size={17} /> New memory</button></div>
+          <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-dot" /> YOUR KNOWLEDGE, IN ONE PLACE</div><h1>{view === 'search' ? <>Find what matters<br /><em>again.</em></> : view === 'organization' || view === 'project' ? <>Keep ideas<br /><em>connected.</em></> : view === 'timeline' ? <>See how ideas<br /><em>unfold.</em></> : view === 'connections' ? <>Follow the<br /><em>connections.</em></> : <>Good things are worth<br /><em>remembering.</em></>}</h1><p className="page-intro">{view === 'search' ? 'Search titles, notes, sources, and saved text.' : view === 'organization' || view === 'project' ? 'Projects, collections, and tags give your memories a home.' : view === 'timeline' ? 'Explore what you saved and when.' : view === 'connections' ? 'Make the relationships between memories visible.' : 'Everything you save, ready when you need it.'}</p></div><button className="primary-button heading-save" onClick={() => openNew('link')}><Plus size={17} /> New memory</button></div>
 
           {view === 'organization' ? <OrganizationView data={organization} refresh={refreshOrganization} onScope={openScope} /> :
+          view === 'project' ? <ProjectOverview projectId={activeProjectId} organization={organization} onOpen={setSelectedId} onSearch={() => { setProjectId(activeProjectId); setTagId(''); setCollectionId(''); setQuery(''); setFilter('all'); setPage(0); setView('search') }} /> :
+          view === 'timeline' ? <TimelineView organization={organization} onOpen={setSelectedId} /> :
+          view === 'connections' ? <ConnectionsView organization={organization} onOpen={setSelectedId} /> :
           <div className="content-panel">
           <div className="content-header"><div><div className="section-kicker">{view === 'search' ? 'FIND A MEMORY' : 'YOUR COLLECTION'}</div><h2>{view === 'search' ? 'Search results' : 'All memories'} <span className="item-total">{total}</span></h2></div><button className="text-action" onClick={() => openNew('link')}>Add something <ArrowRight size={16} /></button></div>
             <div className="toolbar"><div className="search-box"><Search size={19} /><input ref={searchRef} aria-label="Search memories" placeholder="Search anything you remember..." value={query} onChange={event => { setQuery(event.target.value); setPage(0) }} /><span className="keycap"><Command size={12} /> K</span></div><div className="filters" role="group" aria-label="Memory type"><button className={filter === 'all' ? 'filter active' : 'filter'} onClick={() => { setFilter('all'); setPage(0) }}>All</button><button className={filter === 'web_page' ? 'filter active' : 'filter'} onClick={() => { setFilter('web_page'); setPage(0) }}>Web pages</button><button className={filter === 'link' ? 'filter active' : 'filter'} onClick={() => { setFilter('link'); setPage(0) }}>Links</button><button className={filter === 'note' ? 'filter active' : 'filter'} onClick={() => { setFilter('note'); setPage(0) }}>Notes</button><button className={filter === 'snippet' ? 'filter active' : 'filter'} onClick={() => { setFilter('snippet'); setPage(0) }}>Pasted text</button><button className={filter === 'image' ? 'filter active' : 'filter'} onClick={() => { setFilter('image'); setPage(0) }}>Images</button><button className={filter === 'pdf' ? 'filter active' : 'filter'} onClick={() => { setFilter('pdf'); setPage(0) }}>PDFs</button><button className={filter === 'document' ? 'filter active' : 'filter'} onClick={() => { setFilter('document'); setPage(0) }}>Files</button></div>{view === 'library' && <select className="sort-select" aria-label="Sort memories" value={sort} onChange={event => { setSort(event.target.value as Sort); setPage(0) }}><option value="recent">Newest</option><option value="updated">Updated</option><option value="title">Title</option></select>}</div>
@@ -560,13 +570,16 @@ function App({ session, onSignOut }: { session: Session; onSignOut: () => void }
             {(['document', 'pdf', 'image'].includes(selected.kind) || selected.kind === 'web_page' && selected.capture_method === 'manual') && <button className="source-link" disabled={['pending', 'processing'].includes(selected.status)} onClick={() => void reprocess(selected)}>{selected.kind === 'web_page' ? 'Refresh page text' : 'Reprocess original'} <ArrowRight size={15} /></button>}
             {selected.kind === 'web_page' && selected.has_screenshot && <a className="source-link" href={`/v1/uploads/${selected.id}/screenshot`} target="_blank" rel="noopener noreferrer">View saved screenshot <ExternalLink size={15} /></a>}
             <div className="detail-divider" />
-            {selected.kind === 'image' && <><div className="detail-section-title">Preview</div><img className="memory-image-preview" src={`/v1/uploads/${selected.id}/preview`} alt={selected.title} /><div className="detail-section-title">Recognized text</div><p className="detail-note">{extracted ?? (selected.status === 'pending' || selected.status === 'processing' ? 'Recognizing text...' : selected.status === 'failed' ? 'Text recognition failed. The original is still available.' : 'No text was detected in this image.')}</p><div className="detail-divider" /></>}
-            {['web_page', 'snippet'].includes(selected.kind) && <><div className="detail-section-title">Your note</div><p className="detail-note">{selected.note || 'No note added yet.'}</p><div className="detail-divider" /></>}
+            {selected.kind === 'image' && <><div className="detail-section-title">Preview</div><img className="memory-image-preview" src={`/v1/uploads/${selected.id}/preview`} alt={selected.title} /><div className="detail-section-title">Recognized text</div><p className="detail-note"><MarkedText text={extracted ?? (selected.status === 'pending' || selected.status === 'processing' ? 'Recognizing text...' : selected.status === 'failed' ? 'Text recognition failed. The original is still available.' : 'No text was detected in this image.')} annotations={annotations} kind="content" /></p><div className="detail-divider" /></>}
+            {['web_page', 'snippet'].includes(selected.kind) && <><div className="detail-section-title">Your note</div><p className="detail-note"><MarkedText text={selected.note || 'No note added yet.'} annotations={annotations} kind="note" /></p><div className="detail-divider" /></>}
             {selected.kind !== 'image' && <><div className="detail-section-title">{selected.kind === 'document' || selected.kind === 'pdf' ? 'Extracted text' : selected.kind === 'web_page' ? 'Captured page text' : selected.kind === 'snippet' ? 'Pasted text' : 'Your note'}</div>
-            {selected.kind === 'pdf' ? <div className="pdf-pages">{pdfPages.length ? pdfPages.map(page => <section id={`pdf-page-${page.page_number}`} key={page.page_number}><strong>Page {page.page_number}</strong><p className="detail-note">{page.body}</p></section>) : <p className="detail-note">{selected.status === 'partial' ? 'No text was detected on this PDF. The original is still available.' : selected.status === 'failed' ? 'PDF processing failed. The original is still available.' : 'Extracting PDF text...'}</p>}{selected.status === 'failed' && pdfPages.length > 0 && <p className="detail-note">Latest retry failed. Showing previously extracted text.</p>}{selected.status === 'partial' && pdfPages.length > 0 && <p className="detail-note">Some pages have no detectable text.</p>}</div> : <p className="detail-note">{selected.kind === 'document' ? extracted ?? (selected.status === 'failed' ? 'Text extraction failed. The original file is still available.' : selected.status === 'partial' ? 'No readable text was found in this document.' : 'Extracting text from the original file...') : selected.kind === 'web_page' ? extracted ?? (selected.status === 'pending' || selected.status === 'processing' ? 'Fetching page text...' : selected.capture_method === 'manual' ? `Only the URL was saved (${selected.capture_reason || 'text unavailable'}). You can refresh the page text later.` : `Only the URL and title were saved (${selected.capture_reason || 'text unavailable'}). Try saving the page again from the extension.`) : selected.kind === 'snippet' ? extracted ?? 'Loading pasted text...' : selected.note || 'No note added yet.'}</p>}
+            {selected.kind === 'pdf' ? <div className="pdf-pages">{pdfPages.length ? pdfPages.map(page => <section id={`pdf-page-${page.page_number}`} key={page.page_number}><strong>Page {page.page_number}</strong><p className="detail-note"><MarkedText text={page.body} annotations={annotations} kind="content" start={page.start_offset} page={page.page_number} /></p></section>) : <p className="detail-note">{selected.status === 'partial' ? 'No text was detected on this PDF. The original is still available.' : selected.status === 'failed' ? 'PDF processing failed. The original is still available.' : 'Extracting PDF text...'}</p>}{selected.status === 'failed' && pdfPages.length > 0 && <p className="detail-note">Latest retry failed. Showing previously extracted text.</p>}{selected.status === 'partial' && pdfPages.length > 0 && <p className="detail-note">Some pages have no detectable text.</p>}</div> : <p className="detail-note"><MarkedText text={selected.kind === 'document' ? extracted ?? (selected.status === 'failed' ? 'Text extraction failed. The original file is still available.' : selected.status === 'partial' ? 'No readable text was found in this document.' : 'Extracting text from the original file...') : selected.kind === 'web_page' ? extracted ?? (selected.status === 'pending' || selected.status === 'processing' ? 'Fetching page text...' : selected.capture_method === 'manual' ? `Only the URL was saved (${selected.capture_reason || 'text unavailable'}). You can refresh the page text later.` : `Only the URL and title were saved (${selected.capture_reason || 'text unavailable'}). Try saving the page again from the extension.`) : selected.kind === 'snippet' ? extracted ?? 'Loading pasted text...' : selected.note || 'No note added yet.'} annotations={annotations} kind={selected.kind === 'note' || selected.kind === 'link' ? 'note' : 'content'} /></p>}
             <div className="detail-divider" /></>}
             <div className="detail-section-title">Details</div><div className="detail-meta"><span>Type</span><strong>{selected.kind === 'web_page' ? 'Web page' : selected.kind === 'link' ? 'Link' : selected.kind === 'document' ? 'Document' : selected.kind === 'pdf' ? 'PDF' : selected.kind === 'image' ? 'Image' : selected.kind === 'snippet' ? 'Pasted text' : 'Note'}</strong><span>Saved</span><strong>{formatDate(selected.captured_at)}</strong><span>Updated</span><strong>{formatDate(selected.updated_at)}</strong><span>Status</span><strong>{selected.status}</strong>{selected.capture_reason && <><span>Processing</span><strong>{selected.capture_reason.replaceAll('_', ' ')}</strong></>}{selected.source_author && <><span>Author</span><strong>{selected.source_author}</strong></>}{selected.published_at && <><span>Published</span><strong>{formatDate(selected.published_at)}</strong></>}{selected.source_image_uri && <><span>Page image</span><a href={selected.source_image_uri} target="_blank" rel="noopener noreferrer">View at source</a></>}{selected.kind === 'web_page' && selected.capture_method === 'manual' && <><span>Saved copy</span><strong>{extracted ? 'Extracted text only' : selected.status === 'ready' ? 'Extracted text only' : 'URL only'}</strong></>}{selected.original_asset && <><span>File</span><strong>{selected.original_asset.source_filename}</strong><span>Format</span><strong>{selected.original_asset.mime_type}</strong><span>Size</span><strong>{(selected.original_asset.byte_size / 1024).toFixed(1)} KiB</strong></>}{selected.project_name && <><span>Project</span><strong>{selected.project_name}</strong></>}</div>
             {selected.organization ? <OrganizationPicker memoryId={selected.id} selected={selected.organization} data={organization} onChanged={value => { setDirectMemory(previous => previous?.id === selected.id ? { ...previous, organization: value } : previous); void refreshOrganization() }} /> : <p className="organization-picker-empty">Loading organization...</p>}
+            <Annotations key={selected.id} memoryId={selected.id} note={selected.note} content={extracted} pdfPages={pdfPages} onChange={setAnnotations} />
+            <div className="detail-section-title">Connections</div>
+            <ConnectionsView organization={organization} memoryId={selected.id} onOpen={setSelectedId} />
             <div className="detail-actions">{['note', 'link', 'snippet'].includes(selected.kind) && <button className="secondary-button" onClick={() => void openEdit(selected)}>Edit memory</button>}<button className="delete-button" onClick={() => void remove(selected)}><Trash2 size={16} /> Delete</button></div>
           </div>
         </section>
