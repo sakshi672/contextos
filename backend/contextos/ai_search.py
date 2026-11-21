@@ -7,6 +7,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Query
 
 from .ai_budget import refund, reserve, settle
+from .ai_clues import interpret, reasons
 from .ai_provider import EMBEDDING_MODEL, ProviderError, configured, embed
 from .auth import current_session
 from .database import connection
@@ -94,9 +95,24 @@ def hybrid_search(q: str = Query(default="", max_length=200), session: dict = De
                 value["page_number"] = row["page_number"]
         value["semantic_score"] = similarity
         ranked[key] = (value, score + 1 / (60 + rank + 1))
-    ordered = sorted(ranked.values(), key=lambda pair: (-pair[1], -pair[0]["captured_at"].timestamp(), str(pair[0]["id"])))
+    clues = interpret(q)
+    rescored = []
+    for value, score in ranked.values():
+        matched = reasons(value, clues, explicit_date=bool(date_from or date_to),
+                          explicit_domain=bool(domain), explicit_kind=kind != "all")
+        if matched:
+            value["match_reasons"] = list(value.get("match_reasons") or []) + matched
+        rescored.append((value, score + 0.006 * len(matched)))
+    ordered = sorted(rescored, key=lambda pair: (-pair[1], -pair[0]["captured_at"].timestamp(), str(pair[0]["id"])))
     rows = [row | {"hybrid_score": score} for row, score in ordered[offset:offset + limit]]
+    low_confidence = bool(semantic and semantic[0]["semantic_score"] < 0.55)
     return {"data": {"items": rows, "total": max(keyword["total"], len(ordered)),
                      "limit": limit, "offset": offset, "match_mode": "hybrid",
-                     "ai_status": "ready", "low_confidence": bool(semantic and semantic[0]["semantic_score"] < 0.55)},
+                     "ai_status": "ready", "low_confidence": low_confidence,
+                     "interpreted_clues": {
+                         "approximate_date": clues.get("date_label") if not (date_from or date_to) else None,
+                         "source_domain": clues.get("source_domain") if not domain else None,
+                         "source_type": clues.get("kind") if kind == "all" else None},
+                     "alternative_items": keyword["items"][:3] if low_confidence else [],
+                     "alternative_method": "keyword" if low_confidence and keyword["items"] else None},
             "error": None}
