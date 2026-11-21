@@ -31,6 +31,7 @@ from backend.contextos.jobs import claim_one, finish
 from backend.contextos.main import app
 from backend.contextos.storage import path_for
 from backend.contextos.worker import run_once
+from backend.contextos.ai_worker import run_once as run_ai_once
 from backend.contextos.extract_text import handle as extract_text
 from backend.contextos.manual_urls import checked_url, public_address, fetch_page
 
@@ -49,7 +50,7 @@ class PostgresApiTest(unittest.TestCase):
                 db.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(cls.schema)))
         except Exception as exc:
             raise unittest.SkipTest(f"Could not create isolated PostgreSQL test schema: {exc}") from exc
-        os.environ["PGOPTIONS"] = f"-c search_path={cls.schema}"
+        os.environ["PGOPTIONS"] = f"-c search_path={cls.schema},public"
         cls.storage = tempfile.TemporaryDirectory()
         os.environ["CONTEXT_OS_STORAGE_ROOT"] = cls.storage.name
         try:
@@ -119,6 +120,167 @@ class PostgresApiTest(unittest.TestCase):
 
     def extract_test_document(self, account_id, memory_id):
         extract_text({"memory_id": uuid.UUID(str(memory_id)), "account_id": uuid.UUID(str(account_id))})
+
+    def test_ai_opt_in_hybrid_search_budget_and_deletion(self):
+        first, csrf = self.register()
+        account_id = self.started_accounts[-1]
+        river = self.call(first, "/v1/memories", "POST", {
+            "kind": "note", "title": "River observations", "user_note": "Water flows through the valley",
+        }, csrf)[1]["data"]["id"]
+        sky = self.call(first, "/v1/memories", "POST", {
+            "kind": "note", "title": "Night sky", "user_note": "Stars above the mountain",
+        }, csrf)[1]["data"]["id"]
+        self.assertEqual(self.call(first, "/v1/ai/settings")[1]["data"]["enabled"], False)
+        self.assertEqual(self.call(first, "/v1/ai/search?q=stream")[1]["data"]["ai_status"], "disabled")
+        self.assertEqual(self.call(first, "/v1/ai/settings", "PUT", {
+            "enabled": True, "monthly_token_limit": 100000,
+        }, csrf)[0], 422)
+
+        def fake_embed(text):
+            first_dimension = 1.0 if "River" in text or text == "stream" else 0.0
+            return [first_dimension, 1.0 - first_dimension] + [0.0] * 1534, 5
+
+        with patch.dict(os.environ, {"CONTEXT_OS_OPENAI_API_KEY": "test-not-real"}), \
+             patch("backend.contextos.ai_worker.embed", side_effect=fake_embed), \
+             patch("backend.contextos.ai_search.embed", side_effect=fake_embed):
+            status, settings = self.call(first, "/v1/ai/settings", "PUT", {
+                "enabled": True, "monthly_token_limit": 100000,
+                "confirm_cloud_processing": True,
+            }, csrf)
+            self.assertEqual(status, 200, settings)
+            self.assertEqual(self.call(first, "/v1/ai/settings", "PUT", {
+                "enabled": True, "monthly_token_limit": 90000,
+            }, csrf)[0], 200)
+            self.assertTrue(run_ai_once(account_id=uuid.UUID(account_id)))
+            self.assertTrue(run_ai_once(account_id=uuid.UUID(account_id)))
+            self.assertFalse(run_ai_once(account_id=uuid.UUID(account_id)))
+            status, result = self.call(first, "/v1/ai/search?q=stream")
+            self.assertEqual(status, 200, result)
+            self.assertEqual(result["data"]["ai_status"], "ready")
+            self.assertEqual(result["data"]["items"][0]["id"], river)
+            self.assertIn("semantic", result["data"]["items"][0]["match_reasons"])
+            self.assertEqual(self.call(first, "/v1/search?q=stream")[1]["data"]["total"], 0)
+            self.call(first, "/v1/ai/settings", "PUT", {
+                "enabled": True, "monthly_token_limit": 1,
+                "confirm_cloud_processing": True,
+            }, csrf)
+            self.assertEqual(self.call(first, "/v1/ai/search?q=stream")[1]["data"]["ai_status"], "limit_reached")
+            self.call(first, f"/v1/memories/{river}", "DELETE", csrf=csrf)
+            with connection() as db:
+                self.assertEqual(db.execute("SELECT count(*) AS n FROM memory_embeddings WHERE memory_id = %s",
+                                            (river,)).fetchone()["n"], 0)
+            self.call(first, "/v1/ai/settings", "PUT", {
+                "enabled": False, "monthly_token_limit": 0, "delete_derived_data": True,
+            }, csrf)
+            with connection() as db:
+                self.assertEqual(db.execute("SELECT count(*) AS n FROM memory_embeddings WHERE account_id = %s",
+                                            (account_id,)).fetchone()["n"], 0)
+            self.assertEqual(self.call(first, "/v1/ai/search?q=stream")[1]["data"]["ai_status"], "disabled")
+
+    def test_ai_assistant_citations_cache_and_isolation(self):
+        first, csrf = self.register()
+        second, other_csrf = self.register()
+        memory_id = self.call(first, "/v1/memories", "POST", {
+            "kind": "note", "title": "Orbit finding", "user_note": "The telescope saw a ring",
+        }, csrf)[1]["data"]["id"]
+        self.assertEqual(self.call(first, "/v1/ai/assist", "POST", {
+            "task": "summary", "memory_ids": [memory_id],
+        }, csrf)[0], 403)
+        expected = {"answer": "The note reports a ring.", "claims": [
+            {"text": "A ring was observed.", "kind": "fact", "source_ids": ["S1"]},
+            {"text": "Its cause is unknown.", "kind": "missing", "source_ids": []},
+        ]}
+        with patch.dict(os.environ, {"CONTEXT_OS_OPENAI_API_KEY": "test-not-real"}), \
+             patch("backend.contextos.ai_assistant.generate", return_value=(expected, 100, 50)) as model:
+            self.assertEqual(self.call(first, "/v1/ai/settings", "PUT", {
+                "enabled": True, "monthly_token_limit": 100000, "confirm_cloud_processing": True,
+            }, csrf)[0], 200)
+            self.assertEqual(self.call(second, "/v1/ai/assist", "POST", {
+                "task": "summary", "memory_ids": [memory_id],
+            }, other_csrf)[0], 403)
+            status, result = self.call(first, "/v1/ai/assist", "POST", {
+                "task": "summary", "memory_ids": [memory_id],
+            }, csrf)
+            self.assertEqual(status, 200, result)
+            self.assertEqual(result["data"]["claims"][0]["sources"][0]["memory_id"], memory_id)
+            self.assertEqual(result["data"]["claims"][1]["sources"], [])
+            self.assertFalse(result["data"]["cached"])
+            cached = self.call(first, "/v1/ai/assist", "POST", {
+                "task": "summary", "memory_ids": [memory_id],
+            }, csrf)[1]["data"]
+            self.assertTrue(cached["cached"])
+            self.assertEqual(model.call_count, 1)
+            self.assertEqual(self.call(first, f"/v1/memories/{memory_id}", "PATCH", {
+                "user_note": "The telescope saw two rings",
+            }, csrf)[0], 200)
+            regenerated = self.call(first, "/v1/ai/assist", "POST", {
+                "task": "summary", "memory_ids": [memory_id],
+            }, csrf)[1]["data"]
+            self.assertFalse(regenerated["cached"])
+            self.assertEqual(model.call_count, 2)
+            with connection() as db:
+                self.assertEqual(db.execute("SELECT count(*) AS n FROM ai_artifacts WHERE account_id = %s",
+                                            (self.started_accounts[-2],)).fetchone()["n"], 1)
+            self.call(first, f"/v1/memories/{memory_id}", "DELETE", csrf=csrf)
+            with connection() as db:
+                self.assertEqual(db.execute("SELECT count(*) AS n FROM ai_artifacts WHERE account_id = %s",
+                                            (self.started_accounts[-2],)).fetchone()["n"], 0)
+
+    def test_ai_assistant_rejects_invented_citation(self):
+        first, csrf = self.register()
+        memory_id = self.call(first, "/v1/memories", "POST", {
+            "kind": "note", "title": "Private note", "user_note": "Documented claim",
+        }, csrf)[1]["data"]["id"]
+        invalid = {"answer": "Unsupported", "claims": [{"text": "Invented", "kind": "fact", "source_ids": ["S99"]}]}
+        with patch.dict(os.environ, {"CONTEXT_OS_OPENAI_API_KEY": "test-not-real"}), \
+             patch("backend.contextos.ai_assistant.generate", return_value=(invalid, 10, 10)):
+            self.call(first, "/v1/ai/settings", "PUT", {
+                "enabled": True, "monthly_token_limit": 100000, "confirm_cloud_processing": True,
+            }, csrf)
+            self.assertEqual(self.call(first, "/v1/ai/assist", "POST", {
+                "task": "summary", "memory_ids": [memory_id],
+            }, csrf)[0], 502)
+
+    def test_ai_suggestions_require_review(self):
+        first, csrf = self.register()
+        account_id = self.started_accounts[-1]
+        left = self.call(first, "/v1/memories", "POST", {
+            "kind": "note", "title": "Urban gardens", "user_note": "Community gardens support pollinators",
+        }, csrf)[1]["data"]["id"]
+        right = self.call(first, "/v1/memories", "POST", {
+            "kind": "note", "title": "City bees", "user_note": "Pollinators use community gardens",
+        }, csrf)[1]["data"]["id"]
+        project = self.call(first, "/v1/organization/projects", "POST", {"name": "Ecology"}, csrf)[1]["data"]["id"]
+        self.call(first, f"/v1/organization/memories/{left}", "PUT", {
+            "project_ids": [project], "tag_ids": [], "collection_ids": [],
+        }, csrf)
+        def same_vector(_text):
+            return [1.0] + [0.0] * 1535, 4
+        with patch.dict(os.environ, {"CONTEXT_OS_OPENAI_API_KEY": "test-not-real"}), \
+             patch("backend.contextos.ai_worker.embed", side_effect=same_vector):
+            self.call(first, "/v1/ai/settings", "PUT", {
+                "enabled": True, "monthly_token_limit": 100000, "confirm_cloud_processing": True,
+            }, csrf)
+            self.assertTrue(run_ai_once(account_id=uuid.UUID(account_id)))
+            self.assertTrue(run_ai_once(account_id=uuid.UUID(account_id)))
+            self.assertEqual(self.call(first, f"/v1/ai/suggestions/refresh?project_id={project}", "POST", csrf=csrf)[0], 200)
+            suggestions = self.call(first, f"/v1/ai/suggestions?project_id={project}")[1]["data"]["items"]
+            self.assertEqual(len(suggestions), 1)
+            self.assertEqual(suggestions[0]["memory_id"], right)
+            with connection() as db:
+                self.assertEqual(db.execute("SELECT count(*) AS n FROM memory_projects WHERE memory_id = %s AND project_id = %s",
+                                            (right, project)).fetchone()["n"], 0)
+            self.assertEqual(self.call(first, f"/v1/ai/suggestions/{suggestions[0]['id']}/review", "POST",
+                                       {"decision": "approve"}, csrf)[0], 200)
+            with connection() as db:
+                self.assertEqual(db.execute("SELECT count(*) AS n FROM memory_projects WHERE memory_id = %s AND project_id = %s",
+                                            (right, project)).fetchone()["n"], 1)
+            self.assertEqual(self.call(first, f"/v1/ai/suggestions/refresh?memory_id={left}", "POST", csrf=csrf)[0], 200)
+            related = self.call(first, f"/v1/ai/suggestions?memory_id={left}")[1]["data"]["items"]
+            self.assertEqual(len(related), 1)
+            self.assertEqual(self.call(first, f"/v1/ai/suggestions/{related[0]['id']}/review", "POST",
+                                       {"decision": "dismiss"}, csrf)[0], 200)
+            self.assertEqual(self.call(first, f"/v1/ai/suggestions?memory_id={left}")[1]["data"]["items"], [])
 
     def test_context_exploration_relationships_timeline_and_annotations(self):
         first, csrf = self.register()

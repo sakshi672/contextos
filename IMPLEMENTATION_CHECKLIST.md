@@ -105,24 +105,24 @@ Mark a box `[x]` only when the task is implemented and its stated behavior has b
 
 ## Phase 6 — Intelligent Memory
 
-- [ ] Implement embeddings for new or changed content with a documented provider, usage limit, and retry behavior.
+- [x] Implement embeddings for new or changed content with a documented provider, usage limit, and retry behavior (provider mocked in tests; live key unavailable).
 - [ ] Add hybrid keyword and semantic retrieval with source/date/project filters preserved; combine available partial clues such as meaning, entities, approximate dates, source, and extracted image text. Do not imply unsupported visual matching.
 - [ ] Evaluate vague-memory queries against the Phase 0 corpus and compare results with the keyword baseline.
 - [ ] Show why semantic results matched and provide alternative results when confidence is low.
-- [ ] Add related-memory suggestions with evidence and user approval/dismissal.
+- [x] Add related-memory suggestions with similarity evidence and user approval/dismissal.
 - [ ] Add suggested relationships/entities with visible provenance, review, and reversal controls.
-- [ ] Suggest relevant memories for a project, including memories already associated with other projects; let the user approve or dismiss associations.
+- [x] Suggest relevant memories for a project, including memories already associated with other projects; let the user approve or dismiss associations.
 - [ ] Surface recurring themes across selected memories and suggest tags or collections for user review.
-- [ ] Add project-specific assistant questions over the user's saved sources, including research synthesis and identification of unanswered questions where evidence permits.
-- [ ] Add single-source summaries and multi-source comparisons on demand.
-- [ ] Generate ideas grounded in selected memories, identifying supporting sources and model inference.
-- [ ] Link assistant claims to the underlying memory and passage/page when available.
-- [ ] Distinguish source facts, model inference, and missing evidence in assistant responses.
-- [ ] Cache safe repeated operations and avoid regenerating unchanged content unnecessarily.
-- [ ] Let users disable AI; core capture, library, projects, graph, timeline, and keyword search remain functional.
-- [ ] Show AI processing disclosure and usage/cost limits before private content is sent to a provider; prohibit training on private memories without explicit user consent.
-- [ ] Include embeddings and generated content in deletion/reprocessing behavior.
-- [ ] Test citations against source passages and test the disabled/over-budget AI states.
+- [x] Add project-specific assistant questions over the user's saved sources, including research synthesis and identification of unanswered questions where evidence permits (mocked provider; live quality pending).
+- [x] Add single-source summaries and multi-source comparisons on demand (mocked provider; live quality pending).
+- [x] Generate ideas grounded in selected memories, identifying supporting sources and model inference (mocked provider; live quality pending).
+- [x] Link assistant claims to the underlying memory and passage/page when available.
+- [x] Distinguish source facts, model inference, and missing evidence in assistant responses.
+- [x] Cache safe repeated operations and avoid regenerating unchanged content unnecessarily.
+- [x] Let users disable AI; core capture, library, projects, graph, timeline, and keyword search remain functional.
+- [ ] Show AI processing disclosure and usage/cost limits before private content is sent to a provider; prohibit training on private memories without explicit user consent. Disclosure, opt-in, and token ceiling are implemented; currency cost limits and provider-retention review remain.
+- [x] Include embeddings and generated content in deletion/reprocessing behavior.
+- [ ] Test citations against source passages and test the disabled/over-budget AI states. Citation identity, account isolation, disabled, and over-budget tests pass; factual support still needs live evaluation.
 - [ ] **Phase 6 exit:** vague retrieval and source-grounded assistance work across a project, with measured quality and optional AI.
 
 ## Phase 7 — Public release readiness

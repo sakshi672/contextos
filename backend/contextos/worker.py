@@ -10,6 +10,7 @@ from .extract_docx import handle as extract_docx
 from .manual_urls import handle as fetch_url
 from .extract_image import handle as extract_image
 from .object_cleanup import cleanup_one
+from .ai_worker import run_once as embed_one
 
 log = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ HANDLERS = {"extract_text": extract_text, "extract_pdf": extract_pdf, "extract_d
 def run_once(account_id=None) -> bool:
     job = claim_one(account_id=account_id)
     if job is None:
-        return cleanup_one(account_id=account_id)
+        return cleanup_one(account_id=account_id) or embed_one(account_id=account_id)
     handler = HANDLERS.get(job["job_type"])
     if handler is None:
         finish(job["id"], job["account_id"], job["attempt_count"],
