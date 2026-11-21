@@ -20,6 +20,7 @@ from .ai_settings import router as ai_settings_router
 from .ai_search import router as ai_search_router
 from .ai_assistant import router as ai_assistant_router
 from .ai_suggestions import router as ai_suggestions_router
+from .ai_analysis import router as ai_analysis_router
 
 app = FastAPI(title="Context OS API", version="0.1.0", docs_url=None, redoc_url=None)
 app.include_router(auth_router)
@@ -38,6 +39,7 @@ app.include_router(ai_settings_router)
 app.include_router(ai_search_router)
 app.include_router(ai_assistant_router)
 app.include_router(ai_suggestions_router)
+app.include_router(ai_analysis_router)
 
 
 @app.middleware("http")

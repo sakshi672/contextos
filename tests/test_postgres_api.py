@@ -160,6 +160,11 @@ class PostgresApiTest(unittest.TestCase):
             self.assertEqual(result["data"]["items"][0]["id"], river)
             self.assertIn("semantic", result["data"]["items"][0]["match_reasons"])
             self.assertEqual(self.call(first, "/v1/search?q=stream")[1]["data"]["total"], 0)
+            with patch("backend.contextos.ai_search.embed", return_value=([0.0, 0.0, 1.0] + [0.0] * 1533, 5)):
+                weak = self.call(first, "/v1/ai/search?q=Water")[1]["data"]
+            self.assertTrue(weak["low_confidence"])
+            self.assertEqual(weak["alternative_method"], "keyword")
+            self.assertEqual(weak["alternative_items"][0]["id"], river)
             self.call(first, "/v1/ai/settings", "PUT", {
                 "enabled": True, "monthly_token_limit": 1,
                 "confirm_cloud_processing": True,
@@ -281,6 +286,117 @@ class PostgresApiTest(unittest.TestCase):
             self.assertEqual(self.call(first, f"/v1/ai/suggestions/{related[0]['id']}/review", "POST",
                                        {"decision": "dismiss"}, csrf)[0], 200)
             self.assertEqual(self.call(first, f"/v1/ai/suggestions?memory_id={left}")[1]["data"]["items"], [])
+
+    def test_ai_recurring_theme_suggestions_are_reviewed_per_memory(self):
+        first, csrf = self.register()
+        second, other_csrf = self.register()
+        left = self.call(first, "/v1/memories", "POST", {
+            "kind": "note", "title": "Urban gardens plan", "user_note": "Urban gardens support local pollinators",
+        }, csrf)[1]["data"]["id"]
+        right = self.call(first, "/v1/memories", "POST", {
+            "kind": "note", "title": "Urban gardens study", "user_note": "Urban gardens provide habitat",
+        }, csrf)[1]["data"]["id"]
+        project = self.call(first, "/v1/organization/projects", "POST", {"name": "Ecology"}, csrf)[1]["data"]["id"]
+        for memory_id in (left, right):
+            self.call(first, f"/v1/organization/memories/{memory_id}", "PUT", {
+                "project_ids": [project], "tag_ids": [], "collection_ids": [],
+            }, csrf)
+        with patch.dict(os.environ, {"CONTEXT_OS_OPENAI_API_KEY": "test-not-real"}):
+            self.call(first, "/v1/ai/settings", "PUT", {
+                "enabled": True, "monthly_token_limit": 100000, "confirm_cloud_processing": True,
+            }, csrf)
+            status, result = self.call(first, f"/v1/ai/suggestions/refresh?project_id={project}", "POST", csrf=csrf)
+            self.assertEqual(status, 200, result)
+            suggestions = self.call(first, f"/v1/ai/suggestions?project_id={project}")[1]["data"]["items"]
+            tag = next(item for item in suggestions if item["kind"] == "tag" and item["label"] == "Gardens")
+            collection = next(item for item in suggestions if item["kind"] == "collection" and item["label"] == "Urban Gardens")
+            self.assertEqual(tag["model"], "local:recurring-terms-v1")
+            self.assertEqual(self.call(second, f"/v1/ai/suggestions/{tag['id']}/review", "POST",
+                                       {"decision": "approve"}, other_csrf)[0], 403)
+            self.assertEqual(self.call(first, f"/v1/ai/suggestions/{tag['id']}/review", "POST",
+                                       {"decision": "approve"}, csrf)[0], 200)
+            self.assertEqual(self.call(first, f"/v1/ai/suggestions/{collection['id']}/review", "POST",
+                                       {"decision": "approve"}, csrf)[0], 200)
+            with connection() as db:
+                self.assertEqual(db.execute("SELECT count(*) AS n FROM memory_tags WHERE memory_id = %s",
+                                            (tag["memory_id"],)).fetchone()["n"], 1)
+                self.assertEqual(db.execute("SELECT count(*) AS n FROM collection_memories WHERE memory_id = %s",
+                                            (collection["memory_id"],)).fetchone()["n"], 1)
+                self.assertEqual(db.execute("SELECT count(*) AS n FROM memory_tags WHERE memory_id = %s",
+                                            (right if tag["memory_id"] == left else left,)).fetchone()["n"], 0)
+
+    def test_ai_typed_relationship_and_entity_review(self):
+        first, csrf = self.register()
+        second, other_csrf = self.register()
+        left = self.call(first, "/v1/memories", "POST", {
+            "kind": "note", "title": "Aster Institute report",
+            "user_note": "Aster Institute reports an amber signal",
+        }, csrf)[1]["data"]["id"]
+        right = self.call(first, "/v1/memories", "POST", {
+            "kind": "note", "title": "Signal hypothesis",
+            "user_note": "Amber signal supports the Aster hypothesis",
+        }, csrf)[1]["data"]["id"]
+        project = self.call(first, "/v1/organization/projects", "POST", {"name": "Aster research"}, csrf)[1]["data"]["id"]
+        proposed = {"relationship": {"type": "supports", "rationale": "The signal supports the hypothesis",
+            "excerpt_a": "amber signal", "excerpt_b": "Amber signal supports"},
+            "entities": [{"name": "Aster Institute", "type": "organization", "memory_id": left,
+                          "quote": "Aster Institute"}]}
+        self.assertEqual(self.call(first, "/v1/ai/suggestions/analyze", "POST", {
+            "memory_id": left, "related_memory_id": right,
+        }, csrf)[0], 403)
+        with patch.dict(os.environ, {"CONTEXT_OS_OPENAI_API_KEY": "test-not-real"}), \
+             patch("backend.contextos.ai_analysis.generate", return_value=(proposed, 100, 50)):
+            self.call(first, "/v1/ai/settings", "PUT", {
+                "enabled": True, "monthly_token_limit": 100000, "confirm_cloud_processing": True,
+            }, csrf)
+            self.assertEqual(self.call(second, "/v1/ai/suggestions/analyze", "POST", {
+                "memory_id": left, "related_memory_id": right,
+            }, other_csrf)[0], 403)
+            status, response = self.call(first, "/v1/ai/suggestions/analyze", "POST", {
+                "memory_id": left, "related_memory_id": right, "project_id": project,
+            }, csrf)
+            self.assertEqual(status, 200, response)
+            self.assertEqual(response["data"]["proposal_count"], 2)
+            self.assertEqual(len(self.call(first, f"/v1/ai/suggestions?project_id={project}")[1]["data"]["items"]), 2)
+            suggestions = self.call(first, f"/v1/ai/suggestions?memory_id={left}")[1]["data"]["items"]
+            relationship = next(item for item in suggestions if item["kind"] == "relationship")
+            entity = next(item for item in suggestions if item["kind"] == "entity")
+            self.assertEqual(relationship["source_refs"][0]["memory_id"], left)
+            self.assertEqual(entity["entity_type"], "organization")
+            self.assertEqual(self.call(first, f"/v1/ai/suggestions/{relationship['id']}/review", "POST",
+                                       {"decision": "approve"}, csrf)[0], 200)
+            self.assertEqual(self.call(first, f"/v1/ai/suggestions/{entity['id']}/review", "POST",
+                                       {"decision": "approve"}, csrf)[0], 200)
+            with connection() as db:
+                relation = db.execute("""SELECT id, provenance, relation_type FROM memory_relationships
+                    WHERE account_id = %s AND from_memory_id = %s AND to_memory_id = %s""",
+                    (self.started_accounts[-2], left, right)).fetchone()
+            self.assertEqual((relation["provenance"], relation["relation_type"]), ("reviewed_ai", "supports"))
+            linked = self.call(first, f"/v1/ai/entities?memory_id={left}")[1]["data"]["items"]
+            self.assertEqual(linked[0]["name"], "Aster Institute")
+            self.assertEqual(self.call(second, f"/v1/ai/entities/{left}/{linked[0]['id']}", "DELETE",
+                                       csrf=other_csrf)[0], 404)
+            self.assertEqual(self.call(first, f"/v1/ai/entities/{left}/{linked[0]['id']}", "DELETE",
+                                       csrf=csrf)[0], 200)
+            self.assertEqual(self.call(first, f"/v1/relationships/{relation['id']}", "DELETE", csrf=csrf)[0], 200)
+
+    def test_ai_analysis_rejects_unquoted_evidence(self):
+        first, csrf = self.register()
+        memory_id = self.call(first, "/v1/memories", "POST", {
+            "kind": "note", "title": "Source", "user_note": "Aster Institute observation",
+        }, csrf)[1]["data"]["id"]
+        invalid = {"relationship": {"type": "none", "rationale": "", "excerpt_a": "", "excerpt_b": ""},
+                   "entities": [{"name": "Invented Company", "type": "organization", "memory_id": memory_id,
+                                 "quote": "Invented Company"}]}
+        with patch.dict(os.environ, {"CONTEXT_OS_OPENAI_API_KEY": "test-not-real"}), \
+             patch("backend.contextos.ai_analysis.generate", return_value=(invalid, 20, 20)):
+            self.call(first, "/v1/ai/settings", "PUT", {
+                "enabled": True, "monthly_token_limit": 100000, "confirm_cloud_processing": True,
+            }, csrf)
+            self.assertEqual(self.call(first, "/v1/ai/suggestions/analyze", "POST", {
+                "memory_id": memory_id,
+            }, csrf)[0], 502)
+            self.assertEqual(self.call(first, f"/v1/ai/suggestions?memory_id={memory_id}")[1]["data"]["items"], [])
 
     def test_context_exploration_relationships_timeline_and_annotations(self):
         first, csrf = self.register()

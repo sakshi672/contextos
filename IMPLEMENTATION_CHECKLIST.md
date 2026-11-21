@@ -108,11 +108,11 @@ Mark a box `[x]` only when the task is implemented and its stated behavior has b
 - [x] Implement embeddings for new or changed content with a documented provider, usage limit, and retry behavior (provider mocked in tests; live key unavailable).
 - [ ] Add hybrid keyword and semantic retrieval with source/date/project filters preserved; combine available partial clues such as meaning, entities, approximate dates, source, and extracted image text. Do not imply unsupported visual matching.
 - [ ] Evaluate vague-memory queries against the Phase 0 corpus and compare results with the keyword baseline.
-- [ ] Show why semantic results matched and provide alternative results when confidence is low.
+- [x] Label semantic matches and show source snippets; when semantic similarity is weak, provide a separate keyword-ranked alternative set. Detailed explanation quality still needs live evaluation.
 - [x] Add related-memory suggestions with similarity evidence and user approval/dismissal.
-- [ ] Add suggested relationships/entities with visible provenance, review, and reversal controls.
+- [x] Add suggested typed relationships and named entities with quoted source evidence, visible model provenance, approval/dismissal, and reversal controls (mocked provider tests; live suggestion quality remains to evaluate).
 - [x] Suggest relevant memories for a project, including memories already associated with other projects; let the user approve or dismiss associations.
-- [ ] Surface recurring themes across selected memories and suggest tags or collections for user review.
+- [x] Surface recurring terms and phrases across project memories as local tag or collection suggestions for per-memory review; model-based theme quality remains unevaluated.
 - [x] Add project-specific assistant questions over the user's saved sources, including research synthesis and identification of unanswered questions where evidence permits (mocked provider; live quality pending).
 - [x] Add single-source summaries and multi-source comparisons on demand (mocked provider; live quality pending).
 - [x] Generate ideas grounded in selected memories, identifying supporting sources and model inference (mocked provider; live quality pending).
