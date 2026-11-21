@@ -24,12 +24,14 @@ def load_env() -> None:
         if not line or line.startswith("#"):
             continue
         key, separator, value = line.partition("=")
-        if not separator or key not in {"CONTEXT_OS_DB_PASSWORD", "CONTEXT_OS_DATABASE_URL"}:
-            raise ValueError("Invalid backend/.env format; expected only local database settings")
+        if not separator or key not in {"CONTEXT_OS_DB_PASSWORD", "CONTEXT_OS_DATABASE_URL", "CONTEXT_OS_OPENAI_API_KEY"}:
+            raise ValueError("Invalid backend/.env format; expected local database settings and optional AI key")
         values[key] = value
     if not values.get("CONTEXT_OS_DATABASE_URL"):
         raise ValueError("Missing CONTEXT_OS_DATABASE_URL in backend/.env")
     os.environ["CONTEXT_OS_DATABASE_URL"] = values["CONTEXT_OS_DATABASE_URL"]
+    if values.get("CONTEXT_OS_OPENAI_API_KEY"):
+        os.environ["CONTEXT_OS_OPENAI_API_KEY"] = values["CONTEXT_OS_OPENAI_API_KEY"]
     # Local HTTP is loopback-only. Hosted deployments keep secure cookies on.
     os.environ["CONTEXT_OS_COOKIE_SECURE"] = "false"
     os.environ["CONTEXT_OS_RECOVERY_DELIVERY"] = "local"

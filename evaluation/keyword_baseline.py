@@ -32,7 +32,7 @@ def main() -> None:
     try:
         with psycopg.connect(database_url) as db:
             db.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
-        os.environ["PGOPTIONS"] = f"-c search_path={schema}"
+        os.environ["PGOPTIONS"] = f"-c search_path={schema},public"
         migrate()
         account_id = uuid.uuid4()
         ids = {}
